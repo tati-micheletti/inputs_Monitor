@@ -1,23 +1,23 @@
-## Everything in this file and any files in the R directory are sourced during `simInit()`;
-## all functions and objects are put into the `simList`.
-## To use objects, use `sim$xxx` (they are globally available to all modules).
-## Functions can be used inside any function that was sourced in this module;
-## they are namespaced to the module, just like functions in R packages.
-## If exact location is required, functions will be: `sim$.mods$<moduleName>$FunctionName`.
 defineModule(sim, list(
   name = "inputs_Monitor",
-  description = "",
-  keywords = "",
-  authors = structure(list(list(given = c("First", "Middle"), family = "Last", role = c("aut", "cre"), email = "email@example.com", comment = NULL)), class = "person"),
+  description = paste("Creates the final per-species analysis tables for the bird monitor",
+                       "pipeline: spatial CV blocking (real or a non-spatial mimic) and",
+                       "collinearity-based predictor selection (or a user override), producing",
+                       "the model-ready input tables consumed by models_Monitor."),
+  keywords = c("bird monitor", "spatial blocking", "collinearity", "predictor selection"),
+  authors = structure(list(list(given = "Tati", family = "Micheletti", role = c("aut", "cre"),
+                                 email = "tati.micheletti@gmail.com", comment = NULL),
+                           list(given = "Lisa", family = "Hildebrand", role = "aut",
+                                email = "lisa.hildebrand@ufz.de", comment = NULL)), class = "person"),
   childModules = character(0),
   version = list(inputs_Monitor = "0.0.0.9000"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("NEWS.md", "README.md", "inputs_Monitor.Rmd"),
-  reqdPkgs = list("PredictiveEcology/SpaDES.core@development (>= 3.2.0)", "ggplot2"),
+  reqdPkgs = list("PredictiveEcology/SpaDES.core@development (>= 3.2.0)",
+                   "terra", "sf", "blockCV", "dismo", "mgcv", "corrplot"),
   parameters = bindrows(
-    #defineParameter("paramName", "paramClass", value, min, max, "parameter description"),
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
     defineParameter(".plotInitialTime", "numeric", start(sim), NA, NA,
@@ -35,29 +35,87 @@ defineModule(sim, list(
     defineParameter(".seed", "list", list(), NA, NA,
                     "Named list of seeds to use for each event (names)."),
     defineParameter(".useCache", "logical", FALSE, NA, NA,
-                    "Should caching of events or module be used?")
-    ## Opt-in: pin a fixed cacheId per event so a pre-seeded Google Drive folder
-    ## can short-circuit a deterministic event to a download. To enable,
-    ## uncomment the block below (the leading `,` is valid R as a continuation),
-    ## edit the cacheId/cloudFolderID, and set `.useCache` above to include the
-    ## relevant event name(s), e.g. `c("init")`.
-    # ,defineParameter(".useCacheArgs", "list",
-    #                  list(init = list(cacheId       = "_v1.0",
-    #                                   useCloud      = TRUE,
-    #                                   cloudFolderID = "<google-drive-folder-id>")),
-    #                  NA, NA,
-    #                  paste("Optional named list, keyed by event name, of extra arguments",
-    #                        "passed to reproducible::Cache() for that event. Useful for",
-    #                        "pinning a fixed cacheId so a pre-seeded cloud folder can",
-    #                        "short-circuit a deterministic event."))
+                    "Should caching of events or module be used?"),
+
+    ## Toggles ---------------------------------------------------------------------
+    ## NOTE: both spatialBlocking and collinearityCheck ALWAYS run every simulation
+    ## -- these parameters control which STRATEGY they use internally (real vs a
+    ## structurally-identical fallback), not whether they run at all. This is what
+    ## guarantees sim$inputsData always has the same base table structure regardless
+    ## of how these are set: see mimicSpatialBlocks() and collinearityCheckEurope()
+    ## (and its ger_habitat/ger_landscape siblings) for exactly how each fallback
+    ## keeps the contract.
+    defineParameter("runSpatialBlocking", "logical", TRUE, NA, NA,
+                    "TRUE: use real blockCV::cv_spatial() spatial CV blocks (Wiedenroth et al.",
+                    "methodology). FALSE: use mimicSpatialBlocks() instead -- a plain stratified",
+                    "random k-fold with the exact same output structure, so you can compare model",
+                    "performance with/without spatial-autocorrelation-aware blocking."),
+    defineParameter("runCollinearityCheck", "logical", TRUE, NA, NA,
+                    "TRUE: run real block-CV collinearity-based predictor selection",
+                    "(select07Blockcv(), Wiedenroth et al. methodology, capped at 1 predictor",
+                    "per 10 occurrences). FALSE: use all available covariates, unfiltered.",
+                    "Ignored (with a warning) whenever predictorsToUse is not NULL."),
+    defineParameter("predictorsToUse", "character", NULL, NA, NA,
+                    "NULL (default): defer to runCollinearityCheck. \"all\": use every available",
+                    "covariate, unfiltered. A character vector: use exactly these predictor names.",
+                    "Any non-NULL value overrides runCollinearityCheck and emits a warning if it",
+                    "was TRUE, since the two are contradictory instructions."),
+
+    ## Spatial blocking parameters --------------------------------------------------
+    defineParameter("kFolds", "numeric", 5, NA, NA,
+                    "Number of CV folds/blocks."),
+    defineParameter("maxBlockSizeEuropeM", "numeric", 1500000, NA, NA,
+                    "Maximum spatial block size (m) for the European climate SDM."),
+    defineParameter("minBlockSizeEuropeM", "numeric", 200000, NA, NA,
+                    "Minimum spatial block size (m) for the European climate SDM."),
+    defineParameter("maxBlockSizeGerHabitatM", "numeric", 200000, NA, NA,
+                    "Maximum spatial block size (m) for the German habitat SDM."),
+    defineParameter("maxBlockSizeGerLandscapeM", "numeric", 200000, NA, NA,
+                    "Maximum spatial block size (m) for the German landscape SDM."),
+
+    ## Collinearity parameters -------------------------------------------------------
+    defineParameter("collinearityThreshold", "numeric", 0.7, NA, NA,
+                    "Absolute Spearman correlation threshold above which one of a pair of",
+                    "predictors is dropped."),
+    defineParameter("collinearityUnivar", "character", "gam", NA, NA,
+                    "Initial univariate model form for block-CV importance ranking",
+                    "(auto-refined internally based on data)."),
+
+    ## Bioclim reference (must match dataPrep_Monitor's values exactly) ----------------
+    defineParameter("ebba2TrainingYear", "numeric", 2017, NA, NA,
+                    "Target year whose bioclim window was used to train the European EBBA2",
+                    "climate SDM in dataPrep_Monitor -- used here to deterministically locate",
+                    "the matching bioclim_<start>-<end>.tif as the spatial-blocking reference",
+                    "grid, instead of guessing from file modification times. Must match",
+                    "dataPrep_Monitor's ebba2TrainingYear."),
+    defineParameter("climateWindowLength", "numeric", 6, NA, NA,
+                    "Rolling window length (years) used to compute the bioclim climatology.",
+                    "Must match dataPrep_Monitor's climateWindowLength."),
+
+    ## Species -------------------------------------------------------------------------
+    defineParameter("species", "character",
+                    c("Vanellus vanellus", "Milvus milvus", "Lanius collurio",
+                      "Lullula arborea", "Alauda arvensis", "Saxicola rubetra",
+                      "Emberiza calandra", "Emberiza citrinella", "Buteo buteo",
+                      "Sturnus vulgaris", "Perdix perdix"), NA, NA,
+                    "Latin names of focal species. Must match dataPrep_Monitor's species param.")
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
-    expectsInput(objectName = NA, objectClass = NA, desc = NA, sourceURL = NA)
   ),
   outputObjects = bindrows(
-    #createsOutput("objectName", "objectClass", "output object description", ...),
-    createsOutput(objectName = NA, objectClass = NA, desc = NA)
+    createsOutput("pooledOccurrence", "list",
+                  "List with europe/gerHabitat/gerLandscape named-by-species lists of",
+                  "occurrence+covariate data.frames, pooled across years where applicable."),
+    createsOutput("spatialBlocks", "list",
+                  "List with europe/gerHabitat/gerLandscape named-by-species lists of blocks",
+                  "objects (real blockCV::cv_spatial() results, or mimicSpatialBlocks() results",
+                  "-- same structure either way)."),
+    createsOutput("inputsData", "list",
+                  "List with europe/gerHabitat/gerLandscape named-by-species lists, each with",
+                  "`data` (the final model-ready table: base ID/coordinate/occurrence/foldID",
+                  "columns plus resolved predictor columns) and `predictors` (character vector",
+                  "of predictor columns used). This is the input for models_Monitor.")
   )
 ))
 
@@ -65,142 +123,102 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
-      ### check for more detailed object dependencies:
-      ### (use `checkObject` or similar)
-
-      # do stuff for this event
-      sim <- Init(sim)
-
-      # schedule future event(s)
-      sim <- scheduleEvent(sim, P(sim)$.plotInitialTime, "inputs_Monitor", "plot")
-      sim <- scheduleEvent(sim, P(sim)$.saveInitialTime, "inputs_Monitor", "save")
+      sim <- scheduleEvent(sim, time(sim), "inputs_Monitor", "spatialBlocking")
+      sim <- scheduleEvent(sim, time(sim), "inputs_Monitor", "collinearityCheck")
     },
-    plot = {
+
+    spatialBlocking = {
       # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
+      occurrenceDir <- file.path(outputPath(sim), "occurrence")
+      europeOcc <- poolOccurrenceEurope(file.path(occurrenceDir, "europe"), P(sim)$species)
+      habitatOcc <- poolOccurrenceGerHabitat(file.path(occurrenceDir, "habitat"), P(sim)$species)
+      landscapeOcc <- poolOccurrenceGerLandscape(file.path(occurrenceDir, "landscape"), P(sim)$species)
 
-      plotFun(sim) # example of a plotting function
-      # schedule future event(s)
+      if (isTRUE(P(sim)$runSpatialBlocking)) {
+        # Deterministic, not a guess from file mtimes: the exact same
+        # bioclim window that occurrencePrepEurope() (dataPrep_Monitor)
+        # used to train the EBBA2 climate SDM in the first place.
+        windowStart <- P(sim)$ebba2TrainingYear - (P(sim)$climateWindowLength - 1)
+        bioclimFile <- file.path(outputPath(sim), "climate",
+                                  paste0("bioclim_", windowStart, "-", P(sim)$ebba2TrainingYear, ".tif"))
+        if (!file.exists(bioclimFile)) {
+          stop("Expected bioclim training file not found: ", bioclimFile,
+               "\nCheck that inputs_Monitor's ebba2TrainingYear/climateWindowLength match ",
+               "dataPrep_Monitor's, and that prepareClimateData has run.")
+        }
 
-      # e.g.,
-      #sim <- scheduleEvent(sim, time(sim) + P(sim)$.plotInterval, "inputs_Monitor", "plot")
+        europeBlocks <- spatialBlockingEurope(
+          europeOcc, bioclimFile,
+          maxBlockSizeM = P(sim)$maxBlockSizeEuropeM,
+          minBlockSizeM = P(sim)$minBlockSizeEuropeM, k = P(sim)$kFolds)
+        habitatBlocks <- spatialBlockingGerHabitat(
+          habitatOcc, file.path(outputPath(sim), "habitat", "solar_radiation_habitat.tif"),
+          maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM, k = P(sim)$kFolds)
+        landscapeRefFile <- list.files(file.path(outputPath(sim), "landscape"),
+                                        pattern = "^landuse_.*\\.tif$", full.names = TRUE)[1]
+        landscapeBlocks <- spatialBlockingGerLandscape(
+          landscapeOcc, landscapeRefFile,
+          maxBlockSizeM = P(sim)$maxBlockSizeGerLandscapeM, k = P(sim)$kFolds)
+      } else {
+        message("runSpatialBlocking = FALSE -- using mimicSpatialBlocks() instead of real ",
+                "spatial CV blocking.")
+        europeBlocks <- lapply(europeOcc, mimicSpatialBlocks, k = P(sim)$kFolds)
+        habitatBlocks <- lapply(habitatOcc, mimicSpatialBlocks, k = P(sim)$kFolds)
+        landscapeBlocks <- lapply(landscapeOcc, mimicSpatialBlocks, k = P(sim)$kFolds)
+      }
 
+      sim$pooledOccurrence <- list(europe = europeOcc, gerHabitat = habitatOcc, gerLandscape = landscapeOcc)
+      sim$spatialBlocks <- list(europe = europeBlocks, gerHabitat = habitatBlocks, gerLandscape = landscapeBlocks)
       # ! ----- STOP EDITING ----- ! #
     },
-    save = {
+
+    collinearityCheck = {
       # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
+      if (is.null(sim$spatialBlocks)) {
+        stop("collinearityCheck requires sim$spatialBlocks -- the spatialBlocking event ",
+             "must run first (check your module's scheduleEvent order).")
+      }
 
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
+      inputsOutputDir <- file.path(outputPath(sim), "inputs")
+      corrplotDir <- file.path(inputsOutputDir, "corrplots")
 
-      # schedule future event(s)
+      europeResult <- collinearityCheckEurope(
+        sim$pooledOccurrence$europe, sim$spatialBlocks$europe,
+        runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
+        corrplotDir = corrplotDir, threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+      habitatResult <- collinearityCheckGerHabitat(
+        sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
+        runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
+        corrplotDir = corrplotDir, threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+      landscapeResult <- collinearityCheckGerLandscape(
+        sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
+        runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
+        corrplotDir = corrplotDir, threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
 
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + P(sim)$.saveInterval, "inputs_Monitor", "save")
+      sim$inputsData <- list(europe = europeResult, gerHabitat = habitatResult, gerLandscape = landscapeResult)
 
+      # Persist to disk, same shape regardless of the strategy used, so
+      # models_Monitor can read from outputPath(sim)/inputs/<scale>/ directly.
+      for (scaleName in names(sim$inputsData)) {
+        scaleDir <- file.path(inputsOutputDir, scaleName)
+        dir.create(scaleDir, recursive = TRUE, showWarnings = FALSE)
+        for (sp in names(sim$inputsData[[scaleName]])) {
+          spClean <- gsub(" ", "_", sp)
+          saveRDS(sim$inputsData[[scaleName]][[sp]]$data,
+                  file.path(scaleDir, paste0(spClean, "_inputs.rds")))
+          saveRDS(sim$inputsData[[scaleName]][[sp]]$predictors,
+                  file.path(scaleDir, paste0(spClean, "_predictors.rds")))
+        }
+      }
       # ! ----- STOP EDITING ----- ! #
     },
-    event1 = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
 
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + increment, "inputs_Monitor", "templateEvent")
-
-      # ! ----- STOP EDITING ----- ! #
-    },
-    event2 = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + increment, "inputs_Monitor", "templateEvent")
-
-      # ! ----- STOP EDITING ----- ! #
-    },
     warning(noEventWarning(sim))
   )
   return(invisible(sim))
 }
 
-### template initialization
-Init <- function(sim) {
-  # # ! ----- EDIT BELOW ----- ! #
-
-  # ! ----- STOP EDITING ----- ! #
-
-  return(invisible(sim))
-}
-### template for save events
-Save <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # do stuff for this event
-  sim <- saveFiles(sim)
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for plot events
-plotFun <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # do stuff for this event
-  sampleData <- data.frame("TheSample" = sample(1:10, replace = TRUE))
-  Plots(sampleData, fn = ggplotFn) # needs ggplot2
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for your event1
-Event1 <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # THE NEXT TWO LINES ARE FOR DUMMY UNIT TESTS; CHANGE OR DELETE THEM.
-  # sim$event1Test1 <- " this is test for event 1. " # for dummy unit test
-  # sim$event1Test2 <- 999 # for dummy unit test
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for your event2
-Event2 <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # THE NEXT TWO LINES ARE FOR DUMMY UNIT TESTS; CHANGE OR DELETE THEM.
-  # sim$event2Test1 <- " this is test for event 2. " # for dummy unit test
-  # sim$event2Test2 <- 777  # for dummy unit test
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
 .inputObjects <- function(sim) {
-  # Any code written here will be run during the simInit for the purpose of creating
-  # any objects required by this module and identified in the inputObjects element of defineModule.
-  # This is useful if there is something required before simulation to produce the module
-  # object dependencies, including such things as downloading default datasets, e.g.,
-  # downloadData("LCC2005", modulePath(sim)).
-  # Nothing should be created here that does not create a named object in inputObjects.
-  # Any other initiation procedures should be put in "init" eventType of the doEvent function.
-  # Note: the module developer can check if an object is 'suppliedElsewhere' to
-  # selectively skip unnecessary steps because the user has provided those inputObjects in the
-  # simInit call, or another module will supply or has supplied it. e.g.,
-  # if (!suppliedElsewhere('defaultColor', sim)) {
-  #   sim$map <- Cache(prepInputs, extractURL('map')) # download, extract, load file from url in sourceURL
-  # }
-
-  #cacheTags <- c(currentModule(sim), "function:.inputObjects") ## uncomment this if Cache is being used
   dPath <- asPath(getOption("reproducible.destinationPath", dataPath(sim)), 1)
   message(currentModule(sim), ": using dataPath '", dPath, "'.")
 
@@ -209,9 +227,3 @@ Event2 <- function(sim) {
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
 }
-
-ggplotFn <- function(data, ...) {
-  ggplot2::ggplot(data, ggplot2::aes(TheSample)) +
-    ggplot2::geom_histogram(...)
-}
-
