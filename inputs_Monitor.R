@@ -92,6 +92,20 @@ defineModule(sim, list(
                     "Rolling window length (years) used to compute the bioclim climatology.",
                     "Must match dataPrep_Monitor's climateWindowLength."),
 
+    ## Scale resolutions (must match dataPrep_Monitor's/models_Monitor's copies) -------
+    defineParameter("climateResolutionM", "numeric", 50000, NA, NA,
+                    "Resolution (m) of the climate scale -- used, via scaleLabel(), to",
+                    "locate that scale's processed covariates and name its inputs/outputs",
+                    "subfolders. Must match dataPrep_Monitor's climateResolutionM."),
+    defineParameter("habitatResolutionM", "numeric", 200, NA, NA,
+                    "Resolution (m) of the habitat scale -- used, via scaleLabel(), to",
+                    "locate that scale's processed covariates and name its inputs/outputs",
+                    "subfolders. Must match dataPrep_Monitor's habitatResolutionM."),
+    defineParameter("landscapeResolutionM", "numeric", 1000, NA, NA,
+                    "Resolution (m) of the landscape scale -- used, via scaleLabel(), to",
+                    "locate that scale's processed covariates and name its inputs/outputs",
+                    "subfolders. Must match dataPrep_Monitor's landscapeResolutionM."),
+
     ## Species -------------------------------------------------------------------------
     defineParameter("species", "character",
                     c("Vanellus vanellus", "Milvus milvus", "Lanius collurio",
@@ -129,17 +143,19 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
 
     spatialBlocking = {
       # ! ----- EDIT BELOW ----- ! #
-      occurrenceDir <- file.path(outputPath(sim), "occurrence")
-      europeOcc <- poolOccurrenceEurope(file.path(occurrenceDir, "europe"), P(sim)$species)
-      habitatOcc <- poolOccurrenceGerHabitat(file.path(occurrenceDir, "habitat"), P(sim)$species)
-      landscapeOcc <- poolOccurrenceGerLandscape(file.path(occurrenceDir, "landscape"), P(sim)$species)
+      occurrenceDir <- file.path(inputPath(sim), "response", "processed")
+      europeOcc <- poolOccurrenceEurope(file.path(occurrenceDir, "ornitho"), P(sim)$species)
+      habitatOcc <- poolOccurrenceGerHabitat(file.path(occurrenceDir, "MhB"), P(sim)$species)
+      landscapeOcc <- poolOccurrenceGerLandscape(file.path(occurrenceDir, "territories"), P(sim)$species)
+
+      predictorsDir <- file.path(inputPath(sim), "predictors", "processed")
 
       if (isTRUE(P(sim)$runSpatialBlocking)) {
         # Deterministic, not a guess from file mtimes: the exact same
         # bioclim window that occurrencePrepEurope() (dataPrep_Monitor)
         # used to train the EBBA2 climate SDM in the first place.
         windowStart <- P(sim)$ebba2TrainingYear - (P(sim)$climateWindowLength - 1)
-        bioclimFile <- file.path(outputPath(sim), "climate",
+        bioclimFile <- file.path(predictorsDir, scaleLabel(P(sim)$climateResolutionM),
                                   paste0("bioclim_", windowStart, "-", P(sim)$ebba2TrainingYear, ".tif"))
         if (!file.exists(bioclimFile)) {
           stop("Expected bioclim training file not found: ", bioclimFile,
@@ -152,9 +168,10 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
           maxBlockSizeM = P(sim)$maxBlockSizeEuropeM,
           minBlockSizeM = P(sim)$minBlockSizeEuropeM, k = P(sim)$kFolds)
         habitatBlocks <- spatialBlockingGerHabitat(
-          habitatOcc, file.path(outputPath(sim), "habitat", "solar_radiation_habitat.tif"),
+          habitatOcc, file.path(predictorsDir, scaleLabel(P(sim)$habitatResolutionM),
+                                 "solar_radiation_habitat.tif"),
           maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM, k = P(sim)$kFolds)
-        landscapeRefFile <- list.files(file.path(outputPath(sim), "landscape"),
+        landscapeRefFile <- list.files(file.path(predictorsDir, scaleLabel(P(sim)$landscapeResolutionM)),
                                         pattern = "^landuse_.*\\.tif$", full.names = TRUE)[1]
         landscapeBlocks <- spatialBlockingGerLandscape(
           landscapeOcc, landscapeRefFile,
@@ -179,28 +196,41 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
              "must run first (check your module's scheduleEvent order).")
       }
 
-      inputsOutputDir <- file.path(outputPath(sim), "inputs")
-      corrplotDir <- file.path(inputsOutputDir, "corrplots")
+      # Model-ready per-species tables (data+predictors) are still pipeline
+      # INPUT (models_Monitor's input), so they live under inputPath(sim) --
+      # never under outputPath(sim), which is reserved for model fitting/
+      # prediction results. Corrplots, by contrast, are a diagnostic OUTPUT
+      # of this collinearity-selection step, scale-specific, so each goes
+      # under that scale's own outputPath(sim) subfolder.
+      modelReadyDir <- file.path(inputPath(sim), "model_ready")
+      climateLabel <- scaleLabel(P(sim)$climateResolutionM)
+      habitatLabel <- scaleLabel(P(sim)$habitatResolutionM)
+      landscapeLabel <- scaleLabel(P(sim)$landscapeResolutionM)
 
       europeResult <- collinearityCheckEurope(
         sim$pooledOccurrence$europe, sim$spatialBlocks$europe,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
-        corrplotDir = corrplotDir, threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        corrplotDir = file.path(outputPath(sim), climateLabel, "corrplots"),
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
       habitatResult <- collinearityCheckGerHabitat(
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
-        corrplotDir = corrplotDir, threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
-        corrplotDir = corrplotDir, threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
 
       sim$inputsData <- list(europe = europeResult, gerHabitat = habitatResult, gerLandscape = landscapeResult)
 
       # Persist to disk, same shape regardless of the strategy used, so
-      # models_Monitor can read from outputPath(sim)/inputs/<scale>/ directly.
+      # models_Monitor (or a standalone cluster task) can read from
+      # inputPath(sim)/model_ready/<scaleLabel>/ directly.
+      scaleDirByName <- c(europe = climateLabel, gerHabitat = habitatLabel, gerLandscape = landscapeLabel)
       for (scaleName in names(sim$inputsData)) {
-        scaleDir <- file.path(inputsOutputDir, scaleName)
+        scaleDir <- file.path(modelReadyDir, scaleDirByName[[scaleName]])
         dir.create(scaleDir, recursive = TRUE, showWarnings = FALSE)
         for (sp in names(sim$inputsData[[scaleName]])) {
           spClean <- gsub(" ", "_", sp)
