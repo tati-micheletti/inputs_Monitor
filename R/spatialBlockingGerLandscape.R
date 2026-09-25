@@ -11,9 +11,21 @@
 #'   the first band of a landuse_<year>_landscape.tif) used as the
 #'   `cv_spatial()` reference grid.
 #' @param maxBlockSizeM Numeric. Maximum block size in metres.
+#' @param minBlockSizeM Numeric. Minimum block size in metres -- floors the
+#'   autocorrelation-derived block size at 2x the covariate resolution
+#'   (default 2000m = 2x the 1km landscape scale), matching Wiedenroth et
+#'   al.'s own fix: below this floor, adjacent points can share a covariate
+#'   cell across train/test folds, leaking information between them. Verified
+#'   empirically for Milvus milvus at 30km (69.4% of occupied cells had
+#'   points split across >1 fold before this floor was applied) -- this
+#'   function was previously missing the floor entirely, always passing 0
+#'   to `determineBlockSize()`. If a species is ever run at a non-default
+#'   landscape resolution, pass 2x THAT resolution here instead of the
+#'   default.
 #' @param k Integer. Number of folds, default 5.
 #' @return Named list (by species) of `blockCV::cv_spatial()` result objects.
-spatialBlockingGerLandscape <- function(pooledData, refRasterPath, maxBlockSizeM = 200000, k = 5) {
+spatialBlockingGerLandscape <- function(pooledData, refRasterPath, maxBlockSizeM = 200000,
+                                         minBlockSizeM = 2000, k = 5) {
 
   refRaster <- terra::rast(refRasterPath)[[1]]
   result <- list()
@@ -36,7 +48,7 @@ spatialBlockingGerLandscape <- function(pooledData, refRasterPath, maxBlockSizeM
     sfOcc <- sf::st_as_sf(spPa, coords = c("x", "y"), crs = 3035)
 
     message("  Determining block size...")
-    cvBlSize <- determineBlockSize(sfOcc, maxBlockSizeM)
+    cvBlSize <- determineBlockSize(sfOcc, maxBlockSizeM, minBlockSizeM)
 
     message("  Creating spatial blocks (", k, " folds)...")
     scv <- tryCatch({

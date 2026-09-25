@@ -170,12 +170,14 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         habitatBlocks <- spatialBlockingGerHabitat(
           habitatOcc, file.path(predictorsDir, scaleLabel(P(sim)$habitatResolutionM),
                                  "solar_radiation_habitat.tif"),
-          maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM, k = P(sim)$kFolds)
+          maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM,
+          minBlockSizeM = 2 * P(sim)$habitatResolutionM, k = P(sim)$kFolds)
         landscapeRefFile <- list.files(file.path(predictorsDir, scaleLabel(P(sim)$landscapeResolutionM)),
                                         pattern = "^landuse_.*\\.tif$", full.names = TRUE)[1]
         landscapeBlocks <- spatialBlockingGerLandscape(
           landscapeOcc, landscapeRefFile,
-          maxBlockSizeM = P(sim)$maxBlockSizeGerLandscapeM, k = P(sim)$kFolds)
+          maxBlockSizeM = P(sim)$maxBlockSizeGerLandscapeM,
+          minBlockSizeM = 2 * P(sim)$landscapeResolutionM, k = P(sim)$kFolds)
       } else {
         message("runSpatialBlocking = FALSE -- using mimicSpatialBlocks() instead of real ",
                 "spatial CV blocking.")
