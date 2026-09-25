@@ -68,6 +68,24 @@ defineModule(sim, list(
                     "dataPrep_Monitor (loadCovariates()/loadHabitatCovariates()/",
                     "occurrencePrepGerHabitat()), so this doesn't invent new fill logic, it",
                     "just re-exposes an already-backfilled column. See covariatePredictorColumns()."),
+    defineParameter("perSpeciesHedges", "list", NULL, NA, NA,
+                    "NULL (default): every species uses the shared hedgesTreatment parameter",
+                    "above at every scale. Otherwise a named list, species -> scale ->",
+                    "\"drop\"/\"backfill\", overriding hedgesTreatment for just that",
+                    "species+scale (habitat and landscape can differ per species). Sourced from",
+                    "speciesConfig_general.csv's hedges_treatment column (repo root) via",
+                    "loadSpeciesGeneralConfig() in sharedSpeciesConfig.R -- resolved once by",
+                    "runMe.R/the orchestrating script and passed in here as a plain value,",
+                    "same pattern as sharedConfig.R's other shared values; this module doesn't",
+                    "read the CSV itself, to stay self-contained/portable off this repo layout."),
+    defineParameter("perSpeciesExtraCandidates", "list", NULL, NA, NA,
+                    "NULL (default): no per-species extra candidate predictors. Otherwise a",
+                    "named list, species -> named list of scale -> character vector of extra",
+                    "predictor names, ADDED to (not replacing) that scale's default candidate",
+                    "pool before collinearity selection runs. Sourced from",
+                    "speciesConfig_predictors.csv (repo root) via loadSpeciesPredictorExtras()",
+                    "in sharedSpeciesConfig.R -- resolved once by the orchestrating script, same",
+                    "reasoning as perSpeciesHedges above."),
 
     ## Spatial blocking parameters --------------------------------------------------
     defineParameter("kFolds", "numeric", 5, NA, NA,
@@ -232,19 +250,24 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         sim$pooledOccurrence$europe, sim$spatialBlocks$europe,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
         corrplotDir = file.path(outputPath(sim), climateLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
+        perSpeciesExtraCandidates = extractScaleExtras(P(sim)$perSpeciesExtraCandidates, "climate"))
       habitatResult <- collinearityCheckGerHabitat(
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
-        hedgesTreatment = P(sim)$hedgesTreatment)
+        hedgesTreatment = P(sim)$hedgesTreatment,
+        perSpeciesHedges = extractScaleExtras(P(sim)$perSpeciesHedges, "habitat"),
+        perSpeciesExtraCandidates = extractScaleExtras(P(sim)$perSpeciesExtraCandidates, "habitat"))
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
-        hedgesTreatment = P(sim)$hedgesTreatment)
+        hedgesTreatment = P(sim)$hedgesTreatment,
+        perSpeciesHedges = extractScaleExtras(P(sim)$perSpeciesHedges, "landscape"),
+        perSpeciesExtraCandidates = extractScaleExtras(P(sim)$perSpeciesExtraCandidates, "landscape"))
 
       sim$inputsData <- list(europe = europeResult, gerHabitat = habitatResult, gerLandscape = landscapeResult)
 

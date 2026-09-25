@@ -16,15 +16,22 @@
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
 #' @param hedgesTreatment Character, "drop" (default) or "backfill" -- see
-#'   `covariatePredictorColumns()`.
+#'   `covariatePredictorColumns()`. Applies to every species unless
+#'   overridden per-species in `perSpeciesHedges`.
+#' @param perSpeciesHedges Named character vector/list, or NULL (default).
+#'   Per-species `hedgesTreatment` overrides, keyed by species Latin name.
+#' @param perSpeciesExtraCandidates Named list, or NULL (default). Per-species
+#'   extra candidate predictor names (character vectors) to ADD to this
+#'   scale's default candidate pool before collinearity selection runs --
+#'   see `loadSpeciesPredictorExtras()`. Does not replace the default pool.
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used).
 collinearityCheckGerLandscape <- function(pooledData, blocksData, runCollinearityCheck,
                                            predictorsToUse, corrplotDir, threshold = 0.7,
-                                           univar = "gam", hedgesTreatment = "drop") {
+                                           univar = "gam", hedgesTreatment = "drop",
+                                           perSpeciesHedges = NULL, perSpeciesExtraCandidates = NULL) {
 
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
-  allPredictors <- covariatePredictorColumns(hedgesTreatment)
   result <- list()
 
   for (sp in names(pooledData)) {
@@ -35,6 +42,16 @@ collinearityCheckGerLandscape <- function(pooledData, blocksData, runCollinearit
     if (is.null(blocksData[[sp]])) {
       message("No blocks available for ", sp, " -- skipping")
       next
+    }
+
+    spHedgesTreatment <- if (!is.null(perSpeciesHedges) && sp %in% names(perSpeciesHedges)) {
+      perSpeciesHedges[[sp]]
+    } else {
+      hedgesTreatment
+    }
+    allPredictors <- covariatePredictorColumns(spHedgesTreatment)
+    if (!is.null(perSpeciesExtraCandidates) && sp %in% names(perSpeciesExtraCandidates)) {
+      allPredictors <- union(allPredictors, perSpeciesExtraCandidates[[sp]])
     }
 
     nPres <- sum(spPa$occurrence == 1)

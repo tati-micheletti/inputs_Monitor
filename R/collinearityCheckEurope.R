@@ -26,14 +26,17 @@
 #' @param corrplotDir Character. Directory to save correlation plots in.
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
+#' @param perSpeciesExtraCandidates Named list, or NULL (default). Per-species
+#'   extra candidate predictor names (character vectors) to ADD to the
+#'   default bioclim candidate pool before collinearity selection runs --
+#'   see `loadSpeciesPredictorExtras()`. Does not replace the default pool.
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used).
 collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck,
                                      predictorsToUse, corrplotDir, threshold = 0.7,
-                                     univar = "gam") {
+                                     univar = "gam", perSpeciesExtraCandidates = NULL) {
 
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
-  bioVars <- bioclimPredictorColumns()
   result <- list()
 
   for (sp in names(pooledData)) {
@@ -41,9 +44,20 @@ collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck
     spPa <- pooledData[[sp]]
     spClean <- gsub(" ", "_", sp)
 
+    bioVars <- bioclimPredictorColumns()
     missing <- setdiff(bioVars, names(spPa))
     if (length(missing) > 0) {
       stop("Missing bioclim variables for ", sp, ": ", paste(missing, collapse = ", "))
+    }
+
+    if (!is.null(perSpeciesExtraCandidates) && sp %in% names(perSpeciesExtraCandidates)) {
+      extras <- perSpeciesExtraCandidates[[sp]]
+      missingExtras <- setdiff(extras, names(spPa))
+      if (length(missingExtras) > 0) {
+        warning(sp, ": extra candidate predictor(s) not found in the data, ignored: ",
+                paste(missingExtras, collapse = ", "))
+      }
+      bioVars <- union(bioVars, intersect(extras, names(spPa)))
     }
 
     corMat <- cor(spPa[, bioVars], method = "spearman")
