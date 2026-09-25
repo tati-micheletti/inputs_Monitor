@@ -16,14 +16,16 @@
 #' @param corrplotDir Character. Directory to save correlation plots in.
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
+#' @param hedgesTreatment Character, "drop" (default) or "backfill" -- see
+#'   `covariatePredictorColumns()`.
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used).
 collinearityCheckGerHabitat <- function(pooledData, blocksData, runCollinearityCheck,
                                          predictorsToUse, corrplotDir, threshold = 0.7,
-                                         univar = "gam") {
+                                         univar = "gam", hedgesTreatment = "drop") {
 
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
-  allPredictors <- covariatePredictorColumns()
+  allPredictors <- covariatePredictorColumns(hedgesTreatment)
   result <- list()
 
   for (sp in names(pooledData)) {

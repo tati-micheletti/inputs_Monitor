@@ -60,6 +60,14 @@ defineModule(sim, list(
                     "covariate, unfiltered. A character vector: use exactly these predictor names.",
                     "Any non-NULL value overrides runCollinearityCheck and emits a warning if it",
                     "was TRUE, since the two are contradictory instructions."),
+    defineParameter("hedgesTreatment", "character", "drop", NA, NA,
+                    "One of \"drop\" (default) or \"backfill\". \"drop\": hedges is never offered",
+                    "to collinearity selection (methodology decision, 2026-09). \"backfill\":",
+                    "hedges is offered as a normal candidate predictor -- its pre-2017/2022-2023",
+                    "gaps are already filled from the nearest real year upstream in",
+                    "dataPrep_Monitor (loadCovariates()/loadHabitatCovariates()/",
+                    "occurrencePrepGerHabitat()), so this doesn't invent new fill logic, it",
+                    "just re-exposes an already-backfilled column. See covariatePredictorColumns()."),
 
     ## Spatial blocking parameters --------------------------------------------------
     defineParameter("kFolds", "numeric", 5, NA, NA,
@@ -229,12 +237,14 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
+        hedgesTreatment = P(sim)$hedgesTreatment)
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
         runCollinearityCheck = P(sim)$runCollinearityCheck, predictorsToUse = P(sim)$predictorsToUse,
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
+        hedgesTreatment = P(sim)$hedgesTreatment)
 
       sim$inputsData <- list(europe = europeResult, gerHabitat = habitatResult, gerLandscape = landscapeResult)
 
