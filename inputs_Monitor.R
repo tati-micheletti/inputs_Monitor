@@ -50,18 +50,25 @@ defineModule(sim, list(
                     "methodology). FALSE: use mimicSpatialBlocks() instead -- a plain stratified",
                     "random k-fold with the exact same output structure, so you can compare model",
                     "performance with/without spatial-autocorrelation-aware blocking."),
-    defineParameter("runCollinearityCheck", "logical", TRUE, NA, NA,
-                    "TRUE: run real block-CV collinearity-based predictor selection",
-                    "(select07Blockcv(), Wiedenroth et al. methodology, capped at 1 predictor",
-                    "per 10 occurrences). FALSE: use all available covariates, unfiltered.",
-                    "Ignored (with a warning) whenever predictorsToUse is not NULL."),
-    defineParameter("predictorsToUse", "character", NULL, NA, NA,
-                    "NULL (default): defer to runCollinearityCheck. \"all\": use every available",
-                    "covariate, unfiltered. A character vector: use exactly these predictor names,",
-                    "for EVERY species. Any non-NULL value overrides runCollinearityCheck and emits",
-                    "a warning if it was TRUE, since the two are contradictory instructions.",
-                    "Per-species overrides go through perSpeciesPredictors instead (below) --",
-                    "this parameter stays a single global value/vector, unchanged from before."),
+    defineParameter("predictorsToUse", "character", "auto", NA, NA,
+                    "One of \"table\" (use speciesPredictorTable's exact list), \"all\" (use every",
+                    "available covariate, unfiltered), or \"auto\" (default -- real block-CV",
+                    "collinearity selection via select07Blockcv(), Wiedenroth et al. methodology,",
+                    "capped at 1 predictor per 10 occurrences). Applied to every species, UNLESS",
+                    "overridden per-species by a named list (species -> one of those 3 strings) --",
+                    "e.g. sourced from speciesConfig_general.csv's predictor_mode column via",
+                    "loadSpeciesGeneralConfig() in sharedSpeciesConfig.R, resolved once by",
+                    "runMe.R/the orchestrating script and passed in here as a plain value. A",
+                    "species absent from that list defaults to \"auto\"."),
+    defineParameter("speciesPredictorTable", "list", NULL, NA, NA,
+                    "NULL (default): no species can use predictorsToUse=\"table\" mode (falls back",
+                    "to \"auto\" with a warning if any does). Otherwise a named list, species ->",
+                    "scale -> character vector, the exact predictor set a \"table\"-mode species",
+                    "uses at that scale. Sourced from speciesConfig_predictors.csv (repo root) via",
+                    "loadSpeciesPredictorConfig() in sharedSpeciesConfig.R -- resolved once by the",
+                    "orchestrating script and passed in as a plain value, same pattern as",
+                    "sharedConfig.R's other shared values; this module doesn't read the CSV",
+                    "itself, to stay self-contained/portable off this repo layout."),
     defineParameter("hedgesTreatment", "character", "drop", NA, NA,
                     "One of \"drop\" (default) or \"backfill\". \"drop\": hedges is never offered",
                     "to collinearity selection (methodology decision, 2026-09). \"backfill\":",
@@ -70,19 +77,6 @@ defineModule(sim, list(
                     "dataPrep_Monitor (loadCovariates()/loadHabitatCovariates()/",
                     "occurrencePrepGerHabitat()), so this doesn't invent new fill logic, it",
                     "just re-exposes an already-backfilled column. See covariatePredictorColumns()."),
-    defineParameter("perSpeciesPredictors", "list", NULL, NA, NA,
-                    "NULL (default): every species uses the single global predictorsToUse value",
-                    "above. Otherwise a named list, species -> scale -> character vector, giving",
-                    "each species its own exact predictor set per scale (a per-species version of",
-                    "predictorsToUse, not additive -- listing a predictor for a species means",
-                    "\"use exactly this set\", same all-or-nothing override semantics as the",
-                    "global predictorsToUse). A species absent here falls through to the global",
-                    "predictorsToUse/runCollinearityCheck as its default. Sourced from",
-                    "speciesConfig_predictors.csv (repo root) via loadSpeciesPredictorConfig() in",
-                    "sharedSpeciesConfig.R -- resolved once by runMe.R/the orchestrating script and",
-                    "passed in here as a plain value, same pattern as sharedConfig.R's other shared",
-                    "values; this module doesn't read the CSV itself, to stay self-contained/",
-                    "portable off this repo layout."),
 
     ## Spatial blocking parameters --------------------------------------------------
     defineParameter("kFolds", "numeric", 5, NA, NA,
@@ -243,29 +237,29 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
       habitatLabel <- scaleLabel(P(sim)$habitatResolutionM)
       landscapeLabel <- scaleLabel(P(sim)$landscapeResolutionM)
 
+      resolveModePerScale <- function(scale) {
+        if (is.list(P(sim)$predictorsToUse)) extractScaleExtras(P(sim)$predictorsToUse, scale)
+        else P(sim)$predictorsToUse
+      }
+      resolveTablePerScale <- function(scale) extractScaleExtras(P(sim)$speciesPredictorTable, scale)
+
       europeResult <- collinearityCheckEurope(
         sim$pooledOccurrence$europe, sim$spatialBlocks$europe,
-        runCollinearityCheck = P(sim)$runCollinearityCheck,
-        predictorsToUse = if (!is.null(P(sim)$perSpeciesPredictors)) {
-          extractScaleExtras(P(sim)$perSpeciesPredictors, "climate")
-        } else P(sim)$predictorsToUse,
+        predictorsToUse = resolveModePerScale("climate"),
+        speciesPredictorTable = resolveTablePerScale("climate"),
         corrplotDir = file.path(outputPath(sim), climateLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
       habitatResult <- collinearityCheckGerHabitat(
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
-        runCollinearityCheck = P(sim)$runCollinearityCheck,
-        predictorsToUse = if (!is.null(P(sim)$perSpeciesPredictors)) {
-          extractScaleExtras(P(sim)$perSpeciesPredictors, "habitat")
-        } else P(sim)$predictorsToUse,
+        predictorsToUse = resolveModePerScale("habitat"),
+        speciesPredictorTable = resolveTablePerScale("habitat"),
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
         hedgesTreatment = P(sim)$hedgesTreatment)
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
-        runCollinearityCheck = P(sim)$runCollinearityCheck,
-        predictorsToUse = if (!is.null(P(sim)$perSpeciesPredictors)) {
-          extractScaleExtras(P(sim)$perSpeciesPredictors, "landscape")
-        } else P(sim)$predictorsToUse,
+        predictorsToUse = resolveModePerScale("landscape"),
+        speciesPredictorTable = resolveTablePerScale("landscape"),
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
         hedgesTreatment = P(sim)$hedgesTreatment)

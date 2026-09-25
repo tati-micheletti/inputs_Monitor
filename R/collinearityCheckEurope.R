@@ -2,41 +2,39 @@
 #'
 #' For every species, always saves a correlation-structure corrplot over
 #' all candidate bioclim variables (diagnostic, independent of the
-#' predictor-resolution strategy below), then resolves the predictor set
-#' for the final table using, in priority order:
-#'   1. `predictorsToUse` if not NULL (an explicit vector, or "all") --
-#'      always wins, with a warning if `runCollinearityCheck` was TRUE.
-#'   2. Real block-CV collinearity selection (`select07Blockcv()`) if
-#'      `runCollinearityCheck` is TRUE, capped at 1 predictor per 10
-#'      occurrences (the rarer of presence/absence counts).
-#'   3. All available bioclim columns, unfiltered, otherwise.
+#' predictor-resolution mode below). Three predictor-resolution modes,
+#' chosen via `predictorsToUse` (per species, or one value for everyone):
+#' `"table"` (use `speciesPredictorTable`'s exact list for that species),
+#' `"all"` (use every bioclim variable, unfiltered), or `"auto"` (real
+#' block-CV collinearity selection via `select07Blockcv()`, capped at 1
+#' predictor per 10 occurrences).
 #'
-#' Regardless of which branch resolves the predictors, the output table
+#' Regardless of which mode resolves the predictors, the output table
 #' always has the same guaranteed base columns (cell50x50,
 #' birdlife_scientific_name, occurrence, x, y, foldID) plus whatever
-#' predictor columns were resolved -- this is what keeps
-#' `runSpatialBlocking`/`runCollinearityCheck` safely toggleable without
-#' breaking models_Monitor downstream.
+#' predictor columns were resolved.
 #'
 #' @param pooledData Named list (by species) of occurrence+bioclim data.frames.
 #' @param blocksData Named list (by species) of blocks objects (real or
 #'   mimicked) -- must have `$folds_ids` aligned to `pooledData[[sp]]` rows.
-#' @param runCollinearityCheck Logical. Whether to run real collinearity selection.
-#' @param predictorsToUse NULL, "all", a character vector of predictor names
-#'   (applied identically to every species -- unchanged from before), OR a
-#'   named list (species -> NULL/"all"/character vector) for per-species
-#'   overrides -- e.g. sourced from `speciesConfig_predictors.csv` via
-#'   `loadSpeciesPredictorConfig()`. A species absent from the list falls
-#'   through to `runCollinearityCheck`'s normal behavior (its "some default"
-#'   when the config doesn't cover it).
+#' @param predictorsToUse Character `"table"`/`"all"`/`"auto"` (applied to
+#'   every species), OR a named list (species -> one of those 3 strings) for
+#'   per-species modes -- e.g. sourced from `speciesConfig_general.csv`'s
+#'   `predictor_mode` column. A species absent from the list defaults to
+#'   `"auto"`.
+#' @param speciesPredictorTable Named list (species -> character vector), or
+#'   NULL. Only consulted for species in `"table"` mode -- e.g. sourced from
+#'   `speciesConfig_predictors.csv` via `loadSpeciesPredictorConfig()`. A
+#'   `"table"`-mode species missing here falls back to `"auto"` with a
+#'   warning, rather than silently using nothing.
 #' @param corrplotDir Character. Directory to save correlation plots in.
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used).
-collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck,
-                                     predictorsToUse, corrplotDir, threshold = 0.7,
-                                     univar = "gam") {
+collinearityCheckEurope <- function(pooledData, blocksData, predictorsToUse,
+                                     speciesPredictorTable = NULL, corrplotDir,
+                                     threshold = 0.7, univar = "gam") {
 
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
   bioVars <- bioclimPredictorColumns()
@@ -52,10 +50,14 @@ collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck
       stop("Missing bioclim variables for ", sp, ": ", paste(missing, collapse = ", "))
     }
 
-    spPredictorsToUse <- if (is.list(predictorsToUse)) {
-      if (sp %in% names(predictorsToUse)) predictorsToUse[[sp]] else NULL
+    spMode <- if (is.list(predictorsToUse)) {
+      if (sp %in% names(predictorsToUse)) predictorsToUse[[sp]] else "auto"
     } else {
       predictorsToUse
+    }
+    if (!spMode %in% c("table", "all", "auto")) {
+      stop(sp, ": invalid predictorsToUse mode '", spMode, "' -- must be ",
+           "\"table\", \"all\", or \"auto\".")
     }
 
     corMat <- cor(spPa[, bioVars], method = "spearman")
@@ -68,20 +70,22 @@ collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck
     nPres <- sum(spPa$occurrence == 1)
     nAbs <- sum(spPa$occurrence == 0)
 
-    if (!is.null(spPredictorsToUse)) {
-      if (isTRUE(runCollinearityCheck)) {
-        warning("predictorsToUse overrides runCollinearityCheck=TRUE for ", sp,
-                " -- using the specified predictor set instead of collinearity selection.")
-      }
-      predSel <- if (identical(spPredictorsToUse, "all")) bioVars else intersect(spPredictorsToUse, bioVars)
-    } else if (isTRUE(runCollinearityCheck)) {
+    if (identical(spMode, "table") && is.null(speciesPredictorTable[[sp]])) {
+      warning(sp, ": predictor_mode is \"table\" but no entry exists in ",
+              "speciesPredictorTable -- falling back to \"auto\".")
+      spMode <- "auto"
+    }
+
+    if (identical(spMode, "table")) {
+      predSel <- intersect(speciesPredictorTable[[sp]], bioVars)
+    } else if (identical(spMode, "all")) {
+      predSel <- bioVars
+    } else {
       blocksSp <- blocksData[[sp]]
       varSel <- select07Blockcv(X = spPa[, bioVars], y = spPa$occurrence, threshold = threshold,
                                  univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
       occNum <- max(floor(min(nPres, nAbs) / 10), 1)
       predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
-    } else {
-      predSel <- bioVars
     }
 
     message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
