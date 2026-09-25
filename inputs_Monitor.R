@@ -72,6 +72,15 @@ defineModule(sim, list(
                     "Maximum spatial block size (m) for the German habitat SDM."),
     defineParameter("maxBlockSizeGerLandscapeM", "numeric", 200000, NA, NA,
                     "Maximum spatial block size (m) for the German landscape SDM."),
+    defineParameter("blockSizeFloorMultiplier", "numeric", 2, NA, NA,
+                    "Multiplier applied to a scale's covariate resolution to floor its",
+                    "autocorrelation-derived spatial block size (see determineBlockSize()):",
+                    "below resolution x this multiplier, adjacent points can share a covariate",
+                    "cell across train/test folds. Wiedenroth et al./Lisa Hildebrand's v2 code use",
+                    "2x at every scale EXCEPT the 30km landscape variant, which uses 1x -- i.e. even",
+                    "the source methodology treats this as scale-dependent, not a fixed constant.",
+                    "Exposed as one shared multiplier (not hardcoded per call site) so it can be",
+                    "revisited without touching spatialBlockingGerHabitat()/GerLandscape()."),
 
     ## Collinearity parameters -------------------------------------------------------
     defineParameter("collinearityThreshold", "numeric", 0.7, NA, NA,
@@ -171,13 +180,15 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
           habitatOcc, file.path(predictorsDir, scaleLabel(P(sim)$habitatResolutionM),
                                  "solar_radiation_habitat.tif"),
           maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM,
-          minBlockSizeM = 2 * P(sim)$habitatResolutionM, k = P(sim)$kFolds)
+          minBlockSizeM = P(sim)$blockSizeFloorMultiplier * P(sim)$habitatResolutionM,
+          k = P(sim)$kFolds)
         landscapeRefFile <- list.files(file.path(predictorsDir, scaleLabel(P(sim)$landscapeResolutionM)),
                                         pattern = "^landuse_.*\\.tif$", full.names = TRUE)[1]
         landscapeBlocks <- spatialBlockingGerLandscape(
           landscapeOcc, landscapeRefFile,
           maxBlockSizeM = P(sim)$maxBlockSizeGerLandscapeM,
-          minBlockSizeM = 2 * P(sim)$landscapeResolutionM, k = P(sim)$kFolds)
+          minBlockSizeM = P(sim)$blockSizeFloorMultiplier * P(sim)$landscapeResolutionM,
+          k = P(sim)$kFolds)
       } else {
         message("runSpatialBlocking = FALSE -- using mimicSpatialBlocks() instead of real ",
                 "spatial CV blocking.")

@@ -13,14 +13,17 @@
 #'   solar_radiation_habitat.tif) used as the `cv_spatial()` reference grid.
 #' @param maxBlockSizeM Numeric. Maximum block size in metres.
 #' @param minBlockSizeM Numeric. Minimum block size in metres -- floors the
-#'   autocorrelation-derived block size at 2x the covariate resolution
-#'   (default 400m = 2x the 200m habitat scale), matching Wiedenroth et
-#'   al.'s own fix: below this floor, adjacent points can share a covariate
-#'   cell across train/test folds, leaking information between them. Verified
-#'   empirically for Milvus milvus at 30km (69.4% of occupied cells had
-#'   points split across >1 fold before this floor was applied) -- this
-#'   function was previously missing the floor entirely, always passing 0
-#'   to `determineBlockSize()`.
+#'   autocorrelation-derived block size (default 400m = 2x the 200m habitat
+#'   scale, via inputs_Monitor's `blockSizeFloorMultiplier` parameter),
+#'   matching Wiedenroth et al.'s own fix: below this floor, adjacent points
+#'   can share a covariate cell across train/test folds, leaking information
+#'   between them. Verified empirically for Milvus milvus at 30km (69.4% of
+#'   occupied cells had points split across >1 fold before this floor was
+#'   applied) -- this function was previously missing the floor entirely,
+#'   always passing 0 to `determineBlockSize()`. The multiplier itself is
+#'   NOT a fixed law -- Lisa Hildebrand's v2 code uses 2x at every scale
+#'   except its 30km landscape variant, which uses 1x -- so callers should
+#'   pass `blockSizeFloorMultiplier * resolutionM` rather than a hardcoded 2x.
 #' @param k Integer. Number of folds, default 5.
 #' @return Named list (by species) of `blockCV::cv_spatial()` result objects.
 spatialBlockingGerHabitat <- function(pooledData, refRasterPath, maxBlockSizeM = 200000,
