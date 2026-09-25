@@ -12,27 +12,29 @@
 #' @param blocksData Named list (by species) of blocks objects (real or
 #'   mimicked) -- must have `$folds_ids` aligned to `pooledData[[sp]]` rows.
 #' @param runCollinearityCheck Logical. Whether to run real collinearity selection.
-#' @param predictorsToUse NULL, "all", or a character vector of predictor names.
+#' @param predictorsToUse NULL, "all", a character vector of predictor names
+#'   (applied identically to every species -- unchanged from before), OR a
+#'   named list (species -> NULL/"all"/character vector) for per-species
+#'   overrides -- e.g. sourced from `speciesConfig_predictors.csv` via
+#'   `loadSpeciesPredictorConfig()`. A species absent from the list falls
+#'   through to `runCollinearityCheck`'s normal behavior (its "some default"
+#'   when the config doesn't cover it).
 #' @param corrplotDir Character. Directory to save correlation plots in.
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
 #' @param hedgesTreatment Character, "drop" (default) or "backfill" -- see
-#'   `covariatePredictorColumns()`. Applies to every species unless
-#'   overridden per-species in `perSpeciesHedges`.
-#' @param perSpeciesHedges Named character vector/list, or NULL (default).
-#'   Per-species `hedgesTreatment` overrides, keyed by species Latin name.
-#' @param perSpeciesExtraCandidates Named list, or NULL (default). Per-species
-#'   extra candidate predictor names (character vectors) to ADD to this
-#'   scale's default candidate pool before collinearity selection runs --
-#'   see `loadSpeciesPredictorExtras()`. Does not replace the default pool.
+#'   `covariatePredictorColumns()`. A single shared value, tuned in code, not
+#'   per-species -- per-species hedges inclusion belongs in `predictorsToUse`
+#'   instead (list "hedges" for whichever species should get it, once this
+#'   is set to "backfill" so the column actually exists to list).
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used).
 collinearityCheckGerHabitat <- function(pooledData, blocksData, runCollinearityCheck,
                                          predictorsToUse, corrplotDir, threshold = 0.7,
-                                         univar = "gam", hedgesTreatment = "drop",
-                                         perSpeciesHedges = NULL, perSpeciesExtraCandidates = NULL) {
+                                         univar = "gam", hedgesTreatment = "drop") {
 
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
+  allPredictors <- covariatePredictorColumns(hedgesTreatment)
   result <- list()
 
   for (sp in names(pooledData)) {
@@ -45,14 +47,10 @@ collinearityCheckGerHabitat <- function(pooledData, blocksData, runCollinearityC
       next
     }
 
-    spHedgesTreatment <- if (!is.null(perSpeciesHedges) && sp %in% names(perSpeciesHedges)) {
-      perSpeciesHedges[[sp]]
+    spPredictorsToUse <- if (is.list(predictorsToUse)) {
+      if (sp %in% names(predictorsToUse)) predictorsToUse[[sp]] else NULL
     } else {
-      hedgesTreatment
-    }
-    allPredictors <- covariatePredictorColumns(spHedgesTreatment)
-    if (!is.null(perSpeciesExtraCandidates) && sp %in% names(perSpeciesExtraCandidates)) {
-      allPredictors <- union(allPredictors, perSpeciesExtraCandidates[[sp]])
+      predictorsToUse
     }
 
     nPres <- sum(spPa$occurrence == 1)
@@ -82,12 +80,12 @@ collinearityCheckGerHabitat <- function(pooledData, blocksData, runCollinearityC
       grDevices::dev.off()
     }
 
-    if (!is.null(predictorsToUse)) {
+    if (!is.null(spPredictorsToUse)) {
       if (isTRUE(runCollinearityCheck)) {
         warning("predictorsToUse overrides runCollinearityCheck=TRUE for ", sp,
                 " -- using the specified predictor set instead of collinearity selection.")
       }
-      predSel <- if (identical(predictorsToUse, "all")) colnames(X) else intersect(predictorsToUse, colnames(X))
+      predSel <- if (identical(spPredictorsToUse, "all")) colnames(X) else intersect(spPredictorsToUse, colnames(X))
     } else if (isTRUE(runCollinearityCheck)) {
       varSel <- tryCatch({
         select07Blockcv(X = X, y = spPa$occurrence, threshold = threshold, univar = univar,

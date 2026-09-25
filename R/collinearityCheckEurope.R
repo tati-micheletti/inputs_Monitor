@@ -22,21 +22,24 @@
 #' @param blocksData Named list (by species) of blocks objects (real or
 #'   mimicked) -- must have `$folds_ids` aligned to `pooledData[[sp]]` rows.
 #' @param runCollinearityCheck Logical. Whether to run real collinearity selection.
-#' @param predictorsToUse NULL, "all", or a character vector of predictor names.
+#' @param predictorsToUse NULL, "all", a character vector of predictor names
+#'   (applied identically to every species -- unchanged from before), OR a
+#'   named list (species -> NULL/"all"/character vector) for per-species
+#'   overrides -- e.g. sourced from `speciesConfig_predictors.csv` via
+#'   `loadSpeciesPredictorConfig()`. A species absent from the list falls
+#'   through to `runCollinearityCheck`'s normal behavior (its "some default"
+#'   when the config doesn't cover it).
 #' @param corrplotDir Character. Directory to save correlation plots in.
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
-#' @param perSpeciesExtraCandidates Named list, or NULL (default). Per-species
-#'   extra candidate predictor names (character vectors) to ADD to the
-#'   default bioclim candidate pool before collinearity selection runs --
-#'   see `loadSpeciesPredictorExtras()`. Does not replace the default pool.
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used).
 collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck,
                                      predictorsToUse, corrplotDir, threshold = 0.7,
-                                     univar = "gam", perSpeciesExtraCandidates = NULL) {
+                                     univar = "gam") {
 
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
+  bioVars <- bioclimPredictorColumns()
   result <- list()
 
   for (sp in names(pooledData)) {
@@ -44,20 +47,15 @@ collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck
     spPa <- pooledData[[sp]]
     spClean <- gsub(" ", "_", sp)
 
-    bioVars <- bioclimPredictorColumns()
     missing <- setdiff(bioVars, names(spPa))
     if (length(missing) > 0) {
       stop("Missing bioclim variables for ", sp, ": ", paste(missing, collapse = ", "))
     }
 
-    if (!is.null(perSpeciesExtraCandidates) && sp %in% names(perSpeciesExtraCandidates)) {
-      extras <- perSpeciesExtraCandidates[[sp]]
-      missingExtras <- setdiff(extras, names(spPa))
-      if (length(missingExtras) > 0) {
-        warning(sp, ": extra candidate predictor(s) not found in the data, ignored: ",
-                paste(missingExtras, collapse = ", "))
-      }
-      bioVars <- union(bioVars, intersect(extras, names(spPa)))
+    spPredictorsToUse <- if (is.list(predictorsToUse)) {
+      if (sp %in% names(predictorsToUse)) predictorsToUse[[sp]] else NULL
+    } else {
+      predictorsToUse
     }
 
     corMat <- cor(spPa[, bioVars], method = "spearman")
@@ -70,12 +68,12 @@ collinearityCheckEurope <- function(pooledData, blocksData, runCollinearityCheck
     nPres <- sum(spPa$occurrence == 1)
     nAbs <- sum(spPa$occurrence == 0)
 
-    if (!is.null(predictorsToUse)) {
+    if (!is.null(spPredictorsToUse)) {
       if (isTRUE(runCollinearityCheck)) {
         warning("predictorsToUse overrides runCollinearityCheck=TRUE for ", sp,
                 " -- using the specified predictor set instead of collinearity selection.")
       }
-      predSel <- if (identical(predictorsToUse, "all")) bioVars else intersect(predictorsToUse, bioVars)
+      predSel <- if (identical(spPredictorsToUse, "all")) bioVars else intersect(spPredictorsToUse, bioVars)
     } else if (isTRUE(runCollinearityCheck)) {
       blocksSp <- blocksData[[sp]]
       varSel <- select07Blockcv(X = spPa[, bioVars], y = spPa$occurrence, threshold = threshold,
