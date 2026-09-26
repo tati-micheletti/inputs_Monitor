@@ -69,6 +69,17 @@ defineModule(sim, list(
                     "list(\"Buteo buteo\" = list(habitat = c(\"hedges\", \"grassland\"))). ",
                     "A \"table\"-mode species missing here falls back to \"auto\" with a warning. ",
                     "(Populated from speciesConfig_predictors.csv when run via runMe.R.)"),
+    defineParameter("spatialTermConfig", "list", NULL, NA, NA,
+                    "Which species+scale get projected x/y coordinates added as an extra ",
+                    "BRT predictor (a spatial trend-surface term meant to absorb residual ",
+                    "regional structure -- NOT a formal random effect, see DECISIONS.md). ",
+                    "Named list: species -> scale -> TRUE/FALSE. A species+scale left out, ",
+                    "or set FALSE, never gets x/y added. Deliberately opt-in per species+scale ",
+                    "rather than blanket-applied -- it can just as easily hurt a model ",
+                    "(overfitting to historical geography, reduced transportability to future ",
+                    "climate-scale predictions) as help it. ",
+                    "(Populated from speciesConfig_general.csv's spatial_term column when run ",
+                    "via runMe.R, via extractSpatialTermSpecies() -- see that file.)"),
     defineParameter("hedgesTreatment", "character", "drop", NA, NA,
                     "One of \"drop\" (default) or \"backfill\". \"drop\": hedges is never offered",
                     "to collinearity selection (methodology decision, 2026-09). \"backfill\":",
@@ -242,17 +253,20 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         else P(sim)$predictorsToUse
       }
       resolveTablePerScale <- function(scale) extractScaleExtras(P(sim)$speciesPredictorTable, scale)
+      resolveSpatialTermPerScale <- function(scale) extractScaleExtras(P(sim)$spatialTermConfig, scale)
 
       europeResult <- collinearityCheckEurope(
         sim$pooledOccurrence$europe, sim$spatialBlocks$europe,
         predictorsToUse = resolveModePerScale("climate"),
         speciesPredictorTable = resolveTablePerScale("climate"),
+        spatialTermSpecies = resolveSpatialTermPerScale("climate"),
         corrplotDir = file.path(outputPath(sim), climateLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
       habitatResult <- collinearityCheckGerHabitat(
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
         predictorsToUse = resolveModePerScale("habitat"),
         speciesPredictorTable = resolveTablePerScale("habitat"),
+        spatialTermSpecies = resolveSpatialTermPerScale("habitat"),
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
         hedgesTreatment = P(sim)$hedgesTreatment)
@@ -260,6 +274,7 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
         predictorsToUse = resolveModePerScale("landscape"),
         speciesPredictorTable = resolveTablePerScale("landscape"),
+        spatialTermSpecies = resolveSpatialTermPerScale("landscape"),
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
         hedgesTreatment = P(sim)$hedgesTreatment)

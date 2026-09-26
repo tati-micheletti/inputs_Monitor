@@ -32,12 +32,21 @@
 #'   `speciesPredictorTable` instead (list "hedges" for whichever species
 #'   should get it, once this is set to "backfill" so the column actually
 #'   exists to list).
+#' @param spatialTermSpecies Named list (species -> TRUE/FALSE), or NULL.
+#'   Species with `TRUE` get projected `x`/`y` coordinates added as an extra
+#'   predictor on top of whatever the mode resolves -- a spatial
+#'   trend-surface term, NOT a formal random effect (see DECISIONS.md's
+#'   2026-09-26 entries). A species absent from this list, or set `FALSE`,
+#'   never gets it. Deliberately opt-in per species -- can just as easily
+#'   hurt a model (overfitting to historical geography, reduced
+#'   transportability to future predictions, diluted variable-importance
+#'   interpretation) as help it.
 #' @return Named list (by species) with `data` (the final table) and
-#'   `predictors` (character vector of predictor columns used -- always
-#'   includes `x`/`y` on top of whatever the mode resolves, see
-#'   DECISIONS.md's 2026-09-26 spatial-coordinate-predictor entry).
+#'   `predictors` (character vector of predictor columns used -- includes
+#'   `x`/`y` only for species opted into `spatialTermSpecies`).
 collinearityCheckGerHabitat <- function(pooledData, blocksData, predictorsToUse,
-                                         speciesPredictorTable = NULL, corrplotDir,
+                                         speciesPredictorTable = NULL,
+                                         spatialTermSpecies = NULL, corrplotDir,
                                          threshold = 0.7, univar = "gam",
                                          hedgesTreatment = "drop") {
 
@@ -115,13 +124,14 @@ collinearityCheckGerHabitat <- function(pooledData, blocksData, predictorsToUse,
       predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
     }
 
-    # Always add projected x/y coordinates as predictors, regardless of
-    # mode -- a spatial trend-surface term meant to soak up residual
-    # regional structure the environmental covariates alone don't capture
-    # (see DECISIONS.md, 2026-09-26). Not a formal random effect (BRT/
-    # dismo::gbm.step() has no mixed-model machinery) -- functionally,
-    # letting the tree split on location itself.
-    predSel <- c(as.character(predSel), "x", "y")
+    # Opt-in per species (see spatialTermSpecies docstring above) -- add
+    # projected x/y coordinates as predictors, on top of whatever the mode
+    # resolves. Not a formal random effect (BRT/dismo::gbm.step() has no
+    # mixed-model machinery) -- functionally, letting the tree split on
+    # location itself.
+    if (isTRUE(spatialTermSpecies[[sp]])) {
+      predSel <- c(as.character(predSel), "x", "y")
+    }
 
     message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
 
