@@ -1,7 +1,9 @@
 #' Candidate predictor column names for the German habitat and landscape SDMs
 #'
 #' Shared by both scales -- land use (13 or 14 categories, depending on
-#' `hedgesTreatment`) + land cover (3 categories) + DEM derivatives (3 layers).
+#' `hedgesTreatment`) + land cover (3 categories) + DEM derivatives (2
+#' layers: elevation, slope -- solar_radiation dropped 2026-09-26, see
+#' DECISIONS.md).
 #'
 #' `hedges` is excluded by default (methodology decision, 2026-09), but can be
 #' re-included with `hedgesTreatment = "backfill"`. Either way it's already
@@ -19,11 +21,14 @@
 #' @return Character vector of covariate column names.
 covariatePredictorColumns <- function(hedgesTreatment = "drop") {
   stopifnot(hedgesTreatment %in% c("drop", "backfill"))
+  # solar_radiation intentionally excluded (see DECISIONS.md, 2026-09-26 --
+  # dropped as a predictor for every species, not well-scaled/possibly
+  # capturing noise from other unmodeled factors)
   cols <- c("grassland", "winter_cereals", "summer_cereals", "maize", "root_crops",
             "rapeseed", "sunflower", "vegetables", "legumes", "fallow",
             "grapevine", "hops", "orchards_and_berries",
             "built_up", "trees", "water",
-            "elevation", "slope", "solar_radiation")
+            "elevation", "slope")
   if (identical(hedgesTreatment, "backfill")) {
     cols <- append(cols, "hedges", after = which(cols == "legumes"))
   }

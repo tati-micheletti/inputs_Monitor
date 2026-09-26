@@ -31,7 +31,9 @@
 #' @param threshold Numeric. Absolute correlation threshold, default 0.7.
 #' @param univar Character. Initial univariate model form, default "gam".
 #' @return Named list (by species) with `data` (the final table) and
-#'   `predictors` (character vector of predictor columns used).
+#'   `predictors` (character vector of predictor columns used -- always
+#'   includes `x`/`y` on top of whatever the mode resolves, see
+#'   DECISIONS.md's 2026-09-26 spatial-coordinate-predictor entry).
 collinearityCheckEurope <- function(pooledData, blocksData, predictorsToUse,
                                      speciesPredictorTable = NULL, corrplotDir,
                                      threshold = 0.7, univar = "gam") {
@@ -87,6 +89,14 @@ collinearityCheckEurope <- function(pooledData, blocksData, predictorsToUse,
       occNum <- max(floor(min(nPres, nAbs) / 10), 1)
       predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
     }
+
+    # Always add projected x/y coordinates as predictors, regardless of
+    # mode -- a spatial trend-surface term meant to soak up residual
+    # regional structure the environmental covariates alone don't capture
+    # (see DECISIONS.md, 2026-09-26). Not a formal random effect (BRT/
+    # dismo::gbm.step() has no mixed-model machinery) -- functionally,
+    # letting the tree split on location itself.
+    predSel <- c(as.character(predSel), "x", "y")
 
     message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
 
