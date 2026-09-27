@@ -44,104 +44,111 @@
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used -- includes
 #'   `x`/`y` only for species opted into `spatialTermSpecies`).
+#' Resolve final predictors and assemble the model-ready table (German habitat scale)
 collinearityCheckGerHabitat <- function(pooledData, blocksData, predictorsToUse,
-                                         speciesPredictorTable = NULL,
-                                         spatialTermSpecies = NULL, corrplotDir,
-                                         threshold = 0.7, univar = "gam",
-                                         hedgesTreatment = "drop") {
-
+                                        speciesPredictorTable = NULL,
+                                        spatialTermSpecies = NULL, corrplotDir,
+                                        threshold = 0.7, univar = "gam") {
+  
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
-  allPredictors <- covariatePredictorColumns(hedgesTreatment)
+  allPredictors <- covariatePredictorColumns()
   result <- list()
-
+  
   for (sp in names(pooledData)) {
     message("\n  -- ", sp, " --------------------------")
     spPa <- pooledData[[sp]]
     spClean <- gsub(" ", "_", sp)
-
+    
     if (is.null(blocksData[[sp]])) {
       message("No blocks available for ", sp, " -- skipping")
       next
     }
-
+    
     spMode <- if (is.list(predictorsToUse)) {
       if (sp %in% names(predictorsToUse)) predictorsToUse[[sp]] else "auto"
     } else {
       predictorsToUse
     }
     if (!spMode %in% c("table", "all", "auto")) {
-      stop(sp, ": invalid predictorsToUse mode '", spMode, "' -- must be ",
-           "\"table\", \"all\", or \"auto\".")
+      stop(sp, ": invalid predictorsToUse mode '", spMode, "' -- must be \"table\", \"all\", or \"auto\".")
     }
-
+    
     nPres <- sum(spPa$occurrence == 1)
     nAbs <- sum(spPa$occurrence == 0)
     message("Pooled records: ", nrow(spPa), " (", nPres, " pres / ", nAbs, " abs)")
-
+    
+    # Candidate environmental predictors present in data
     predCols <- intersect(allPredictors, names(spPa))
     allNaCols <- predCols[sapply(predCols, function(col) all(is.na(spPa[[col]])))]
     if (length(allNaCols) > 0) {
       message("Removing all-NA predictors: ", paste(allNaCols, collapse = ", "))
       predCols <- setdiff(predCols, allNaCols)
     }
-
+    
     X <- spPa[, predCols, drop = FALSE]
     X <- X[, sapply(X, function(col) length(unique(col[!is.na(col)])) > 1), drop = FALSE]
-
+    
     if (ncol(X) < 2) {
       warning("Too few variable predictors for ", sp, " -- skipping")
       next
     }
-
+    
     corrplotFile <- file.path(corrplotDir, paste0(spClean, "_habitat_pooled.png"))
     if (!file.exists(corrplotFile)) {
       grDevices::png(corrplotFile, width = 1200, height = 1200, res = 150)
       corrplot::corrplot.mixed(cor(X, method = "spearman", use = "complete.obs"),
-                                tl.pos = "lt", tl.cex = 0.6, number.cex = 0.4, addCoefasPercent = TRUE)
+                               tl.pos = "lt", tl.cex = 0.6, number.cex = 0.4, addCoefasPercent = TRUE)
       grDevices::dev.off()
     }
-
+    
+    # Fallback if table mode is requested but species is missing from config table
     if (identical(spMode, "table") && is.null(speciesPredictorTable[[sp]])) {
-      warning(sp, ": predictor_mode is \"table\" but no entry exists in ",
-              "speciesPredictorTable -- falling back to \"auto\".")
+      warning(sp, ": predictor_mode is \"table\" but no entry exists in speciesPredictorTable -- falling back to \"auto\".")
       spMode <- "auto"
     }
-
+    
+    # --- RESOLVE PREDICTORS ---
     if (identical(spMode, "table")) {
-      predSel <- intersect(speciesPredictorTable[[sp]], colnames(X))
+      requested <- speciesPredictorTable[[sp]]
+      requested <- requested[!is.na(requested) & nzchar(trimws(requested))]
+      
+      if (length(requested) == 0) {
+        stop(sprintf("Species '%s' has predictor_mode='table' at HABITAT scale, but no predictors listed in speciesConfig_predictors.csv!", sp))
+      }
+      
+      missingCols <- setdiff(requested, names(spPa))
+      if (length(missingCols) > 0) {
+        stop(sprintf("\n[PREDICTOR ERROR] Species '%s' [HABITAT scale]:\nRequested predictor(s) %s were NOT found in occurrence data!\nAvailable columns: %s\n",
+                     sp, paste(dQuote(missingCols), collapse = ", "), paste(names(X), collapse = ", ")))
+      }
+      predSel <- requested
+      
     } else if (identical(spMode, "all")) {
       predSel <- colnames(X)
+      
     } else {
-      varSel <- tryCatch({
-        select07Blockcv(X = X, y = spPa$occurrence, threshold = threshold, univar = univar,
-                         spBlock = blocksData[[sp]], weights = rep(1, nrow(spPa)))
-      }, error = function(e) {
-        warning("Variable selection failed for ", sp, ": ", e$message)
-        NULL
-      })
-      if (is.null(varSel)) next
+      # "auto": real block-CV collinearity selection
+      blocksSp <- blocksData[[sp]]
+      varSel <- select07Blockcv(X = X, y = spPa$occurrence, threshold = threshold,
+                                univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
       occNum <- max(floor(min(nPres, nAbs) / 10), 1)
       predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
     }
-
-    # Opt-in per species (see spatialTermSpecies docstring above) -- add
-    # projected x/y coordinates as predictors, on top of whatever the mode
-    # resolves. Not a formal random effect (BRT/dismo::gbm.step() has no
-    # mixed-model machinery) -- functionally, letting the tree split on
-    # location itself.
+    
+    # Append spatial coordinates ONCE if configured
     if (isTRUE(spatialTermSpecies[[sp]])) {
       predSel <- c(as.character(predSel), "x", "y")
     }
-
+    
     message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
-
+    
     spPaOut <- spPa
     spPaOut$foldID <- blocksData[[sp]]$folds_ids
-
+    
     keepCols <- c("AREA_NATIONAL_CODE", "year", "latin_name", "occurrence", "x", "y", "foldID", predSel)
     result[[sp]] <- list(data = spPaOut[, intersect(keepCols, names(spPaOut))],
-                          predictors = as.character(predSel))
+                         predictors = as.character(predSel))
   }
-
+  
   result
 }

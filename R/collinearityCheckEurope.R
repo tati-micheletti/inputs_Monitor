@@ -88,13 +88,38 @@ collinearityCheckEurope <- function(pooledData, blocksData, predictorsToUse,
     }
 
     if (identical(spMode, "table")) {
-      predSel <- intersect(speciesPredictorTable[[sp]], bioVars)
+      requested <- speciesPredictorTable[[sp]]
+      requested <- requested[!is.na(requested) & nzchar(trimws(requested))]
+      
+      # Guard against empty table selection
+      if (length(requested) == 0) {
+        stop(sprintf(
+          "Species '%s' has predictor_mode='table' at CLIMATE scale, but no climate predictors are listed in speciesConfig_predictors.csv!",
+          sp
+        ))
+      }
+      
+      # Check against bioVars so nothing drops silently
+      missingCols <- setdiff(requested, bioVars)
+      if (length(missingCols) > 0) {
+        stop(sprintf(
+          "\n[PREDICTOR ERROR] Species '%s' [CLIMATE scale]:\nRequested climate predictor(s) %s were NOT found in Europe dataset!\nAvailable climate predictors are: %s\n",
+          sp,
+          paste(dQuote(missingCols), collapse = ", "),
+          paste(bioVars, collapse = ", ")
+        ))
+      }
+      predSel <- requested
+      
     } else if (identical(spMode, "all")) {
+      # KEEP THIS: uses all climate variables
       predSel <- bioVars
+      
     } else {
+      # KEEP THIS: automated collinearity selection using blockCV
       blocksSp <- blocksData[[sp]]
       varSel <- select07Blockcv(X = spPa[, bioVars], y = spPa$occurrence, threshold = threshold,
-                                 univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
+                                univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
       occNum <- max(floor(min(nPres, nAbs) / 10), 1)
       predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
     }
