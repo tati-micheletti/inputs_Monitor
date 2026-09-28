@@ -16,6 +16,7 @@ defineModule(sim, list(
   citation = list("citation.bib"),
   documentation = list("NEWS.md", "README.md", "inputs_Monitor.Rmd"),
   reqdPkgs = list("PredictiveEcology/SpaDES.core@development (>= 3.2.0)",
+                   "PredictiveEcology/reproducible@development",
                    "terra", "sf", "blockCV", "dismo", "mgcv", "corrplot"),
   parameters = bindrows(
     defineParameter(".plots", "character", "screen", NA, NA,
@@ -261,21 +262,24 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         speciesPredictorTable = resolveTablePerScale("climate"),
         spatialTermSpecies = resolveSpatialTermPerScale("climate"),
         corrplotDir = file.path(outputPath(sim), climateLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
+        cachePath = cachePath(sim))
       habitatResult <- collinearityCheckGerHabitat(
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
         predictorsToUse = resolveModePerScale("habitat"),
         speciesPredictorTable = resolveTablePerScale("habitat"),
         spatialTermSpecies = resolveSpatialTermPerScale("habitat"),
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
+        cachePath = cachePath(sim))
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
         predictorsToUse = resolveModePerScale("landscape"),
         speciesPredictorTable = resolveTablePerScale("landscape"),
         spatialTermSpecies = resolveSpatialTermPerScale("landscape"),
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
+        cachePath = cachePath(sim))
 
       sim$inputsData <- list(europe = europeResult, gerHabitat = habitatResult, gerLandscape = landscapeResult)
 

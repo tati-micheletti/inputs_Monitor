@@ -39,14 +39,21 @@
 #'   hurt a model (overfitting to historical geography, reduced
 #'   transportability to future predictions, diluted variable-importance
 #'   interpretation) as help it.
+#' @param cachePath Character, or NULL (default). Directory for
+#'   `reproducible::Cache()`'s per-species cache (see
+#'   `resolveEuropeSpeciesPredictors()`) -- e.g. `cachePath(sim)`, a
+#'   stable location shared across runs. NULL falls back to a temp
+#'   directory, for standalone/test calls.
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used -- includes
 #'   `x`/`y` only for species opted into `spatialTermSpecies`).
 collinearityCheckEurope <- function(pooledData, blocksData, predictorsToUse,
                                      speciesPredictorTable = NULL,
                                      spatialTermSpecies = NULL, corrplotDir,
-                                     threshold = 0.7, univar = "gam") {
+                                     threshold = 0.7, univar = "gam",
+                                     cachePath = NULL) {
 
+  if (is.null(cachePath)) cachePath <- file.path(tempdir(), "birdMonitor_cache")
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
   bioVars <- bioclimPredictorColumns()
   result <- list()
@@ -78,70 +85,84 @@ collinearityCheckEurope <- function(pooledData, blocksData, predictorsToUse,
                               addCoefasPercent = TRUE)
     grDevices::dev.off()
 
-    nPres <- sum(spPa$occurrence == 1)
-    nAbs <- sum(spPa$occurrence == 0)
-
     if (identical(spMode, "table") && is.null(speciesPredictorTable[[sp]])) {
       warning(sp, ": predictor_mode is \"table\" but no entry exists in ",
               "speciesPredictorTable -- falling back to \"auto\".")
       spMode <- "auto"
     }
 
-    if (identical(spMode, "table")) {
-      requested <- speciesPredictorTable[[sp]]
-      requested <- requested[!is.na(requested) & nzchar(trimws(requested))]
-      
-      # Guard against empty table selection
-      if (length(requested) == 0) {
-        stop(sprintf(
-          "Species '%s' has predictor_mode='table' at CLIMATE scale, but no climate predictors are listed in speciesConfig_predictors.csv!",
-          sp
-        ))
-      }
-      
-      # Check against bioVars so nothing drops silently
-      missingCols <- setdiff(requested, bioVars)
-      if (length(missingCols) > 0) {
-        stop(sprintf(
-          "\n[PREDICTOR ERROR] Species '%s' [CLIMATE scale]:\nRequested climate predictor(s) %s were NOT found in Europe dataset!\nAvailable climate predictors are: %s\n",
-          sp,
-          paste(dQuote(missingCols), collapse = ", "),
-          paste(bioVars, collapse = ", ")
-        ))
-      }
-      predSel <- requested
-      
-    } else if (identical(spMode, "all")) {
-      # KEEP THIS: uses all climate variables
-      predSel <- bioVars
-      
-    } else {
-      # KEEP THIS: automated collinearity selection using blockCV
-      blocksSp <- blocksData[[sp]]
-      varSel <- select07Blockcv(X = spPa[, bioVars], y = spPa$occurrence, threshold = threshold,
-                                univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
-      occNum <- max(floor(min(nPres, nAbs) / 10), 1)
-      predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
-    }
+    spResult <- reproducible::Cache(
+      resolveEuropeSpeciesPredictors, sp = sp, spPa = spPa, blocksSp = blocksData[[sp]],
+      bioVars = bioVars, spMode = spMode, requestedPredictors = speciesPredictorTable[[sp]],
+      spatialTerm = isTRUE(spatialTermSpecies[[sp]]), threshold = threshold, univar = univar,
+      cachePath = cachePath, userTags = c("collinearityCheckEurope", spClean))
 
-    # Opt-in per species (see spatialTermSpecies docstring above) -- add
-    # projected x/y coordinates as predictors, on top of whatever the mode
-    # resolves. Not a formal random effect (BRT/dismo::gbm.step() has no
-    # mixed-model machinery) -- functionally, letting the tree split on
-    # location itself.
-    if (isTRUE(spatialTermSpecies[[sp]])) {
-      predSel <- c(as.character(predSel), "x", "y")
-    }
-
-    message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
-
-    spPaOut <- spPa
-    spPaOut$foldID <- blocksData[[sp]]$folds_ids
-
-    keepCols <- c("cell50x50", "birdlife_scientific_name", "occurrence", "x", "y", "foldID", predSel)
-    result[[sp]] <- list(data = spPaOut[, intersect(keepCols, names(spPaOut))],
-                          predictors = as.character(predSel))
+    result[[sp]] <- spResult
   }
 
   result
+}
+
+#' Resolve one species' final predictor set and assemble its model-ready table
+#'
+#' See `resolveHabitatSpeciesPredictors()` in `collinearityCheckGerHabitat.R`
+#' for the full rationale (same pattern, Europe/climate scale).
+#'
+#' @param bioVars Character vector. Candidate bioclim predictor names.
+#' @inheritParams resolveHabitatSpeciesPredictors
+#' @return List with `data` (the final table) and `predictors`.
+resolveEuropeSpeciesPredictors <- function(sp, spPa, blocksSp, bioVars, spMode,
+                                            requestedPredictors, spatialTerm, threshold, univar) {
+  nPres <- sum(spPa$occurrence == 1)
+  nAbs <- sum(spPa$occurrence == 0)
+
+  if (identical(spMode, "table")) {
+    requested <- requestedPredictors
+    requested <- requested[!is.na(requested) & nzchar(trimws(requested))]
+
+    if (length(requested) == 0) {
+      stop(sprintf(
+        "Species '%s' has predictor_mode='table' at CLIMATE scale, but no climate predictors are listed in speciesConfig_predictors.csv!",
+        sp
+      ))
+    }
+
+    missingCols <- setdiff(requested, bioVars)
+    if (length(missingCols) > 0) {
+      stop(sprintf(
+        "\n[PREDICTOR ERROR] Species '%s' [CLIMATE scale]:\nRequested climate predictor(s) %s were NOT found in Europe dataset!\nAvailable climate predictors are: %s\n",
+        sp,
+        paste(dQuote(missingCols), collapse = ", "),
+        paste(bioVars, collapse = ", ")
+      ))
+    }
+    predSel <- requested
+
+  } else if (identical(spMode, "all")) {
+    predSel <- bioVars
+
+  } else {
+    varSel <- select07Blockcv(X = spPa[, bioVars], y = spPa$occurrence, threshold = threshold,
+                              univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
+    occNum <- max(floor(min(nPres, nAbs) / 10), 1)
+    predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
+  }
+
+  # Opt-in per species (see spatialTermSpecies docstring above) -- add
+  # projected x/y coordinates as predictors, on top of whatever the mode
+  # resolves. Not a formal random effect (BRT/dismo::gbm.step() has no
+  # mixed-model machinery) -- functionally, letting the tree split on
+  # location itself.
+  if (isTRUE(spatialTerm)) {
+    predSel <- c(as.character(predSel), "x", "y")
+  }
+
+  message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
+
+  spPaOut <- spPa
+  spPaOut$foldID <- blocksSp$folds_ids
+
+  keepCols <- c("cell50x50", "birdlife_scientific_name", "occurrence", "x", "y", "foldID", predSel)
+  list(data = spPaOut[, intersect(keepCols, names(spPaOut))],
+       predictors = as.character(predSel))
 }

@@ -41,29 +41,35 @@
 #'   hurt a model (overfitting to historical geography, reduced
 #'   transportability to future predictions, diluted variable-importance
 #'   interpretation) as help it.
+#' @param cachePath Character, or NULL (default). Directory for
+#'   `reproducible::Cache()`'s per-species cache (see
+#'   `resolveLandscapeSpeciesPredictors()`) -- e.g. `cachePath(sim)`, a
+#'   stable location shared across runs. NULL falls back to a temp
+#'   directory, for standalone/test calls.
 #' @return Named list (by species) with `data` (the final table) and
 #'   `predictors` (character vector of predictor columns used -- includes
 #'   `x`/`y` only for species opted into `spatialTermSpecies`).
-#' Resolve final predictors and assemble the model-ready table (German landscape scale)
 collinearityCheckGerLandscape <- function(pooledData, blocksData, predictorsToUse,
                                           speciesPredictorTable = NULL,
                                           spatialTermSpecies = NULL, corrplotDir,
-                                          threshold = 0.7, univar = "gam") {
-  
+                                          threshold = 0.7, univar = "gam",
+                                          cachePath = NULL) {
+
+  if (is.null(cachePath)) cachePath <- file.path(tempdir(), "birdMonitor_cache")
   dir.create(corrplotDir, recursive = TRUE, showWarnings = FALSE)
   allPredictors <- covariatePredictorColumns()
   result <- list()
-  
+
   for (sp in names(pooledData)) {
     message("\n  -- ", sp, " --------------------")
     spPa <- pooledData[[sp]]
     spClean <- gsub(" ", "_", sp)
-    
+
     if (is.null(blocksData[[sp]])) {
       message("No blocks available for ", sp, " -- skipping")
       next
     }
-    
+
     spMode <- if (is.list(predictorsToUse)) {
       if (sp %in% names(predictorsToUse)) predictorsToUse[[sp]] else "auto"
     } else {
@@ -72,26 +78,26 @@ collinearityCheckGerLandscape <- function(pooledData, blocksData, predictorsToUs
     if (!spMode %in% c("table", "all", "auto")) {
       stop(sp, ": invalid predictorsToUse mode '", spMode, "' -- must be \"table\", \"all\", or \"auto\".")
     }
-    
+
     nPres <- sum(spPa$occurrence == 1)
     nAbs <- sum(spPa$occurrence == 0)
     message("Pooled records: ", nrow(spPa), " (", nPres, " pres / ", nAbs, " abs)")
-    
+
     predCols <- intersect(allPredictors, names(spPa))
     allNaCols <- predCols[sapply(predCols, function(col) all(is.na(spPa[[col]])))]
     if (length(allNaCols) > 0) {
       message("Removing all-NA predictors: ", paste(allNaCols, collapse = ", "))
       predCols <- setdiff(predCols, allNaCols)
     }
-    
+
     X <- spPa[, predCols, drop = FALSE]
     X <- X[, sapply(X, function(col) length(unique(col[!is.na(col)])) > 1), drop = FALSE]
-    
+
     if (ncol(X) < 2) {
       warning("Too few variable predictors for ", sp, " -- skipping")
       next
     }
-    
+
     corrplotFile <- file.path(corrplotDir, paste0(spClean, "_landscape_pooled.png"))
     if (!file.exists(corrplotFile)) {
       grDevices::png(corrplotFile, width = 1200, height = 1200, res = 150)
@@ -99,54 +105,80 @@ collinearityCheckGerLandscape <- function(pooledData, blocksData, predictorsToUs
                                tl.pos = "lt", tl.cex = 0.6, number.cex = 0.4, addCoefasPercent = TRUE)
       grDevices::dev.off()
     }
-    
+
     if (identical(spMode, "table") && is.null(speciesPredictorTable[[sp]])) {
       warning(sp, ": predictor_mode is \"table\" but no entry exists in speciesPredictorTable -- falling back to \"auto\".")
       spMode <- "auto"
     }
-    
-    # --- RESOLVE PREDICTORS ---
-    if (identical(spMode, "table")) {
-      requested <- speciesPredictorTable[[sp]]
-      requested <- requested[!is.na(requested) & nzchar(trimws(requested))]
-      
-      if (length(requested) == 0) {
-        stop(sprintf("Species '%s' has predictor_mode='table' at LANDSCAPE scale, but no predictors listed in speciesConfig_predictors.csv!", sp))
-      }
-      
-      missingCols <- setdiff(requested, names(spPa))
-      if (length(missingCols) > 0) {
-        stop(sprintf("\n[PREDICTOR ERROR] Species '%s' [LANDSCAPE scale]:\nRequested predictor(s) %s were NOT found in occurrence data!\nAvailable columns: %s\n",
-                     sp, paste(dQuote(missingCols), collapse = ", "), paste(names(X), collapse = ", ")))
-      }
-      predSel <- requested
-      
-    } else if (identical(spMode, "all")) {
-      predSel <- colnames(X)
-      
-    } else {
-      # "auto": real block-CV collinearity selection
-      blocksSp <- blocksData[[sp]]
-      varSel <- select07Blockcv(X = X, y = spPa$occurrence, threshold = threshold,
-                                univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
-      occNum <- max(floor(min(nPres, nAbs) / 10), 1)
-      predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
-    }
-    
-    # Append spatial coordinates ONCE if configured
-    if (isTRUE(spatialTermSpecies[[sp]])) {
-      predSel <- c(as.character(predSel), "x", "y")
-    }
-    
-    message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
-    
-    spPaOut <- spPa
-    spPaOut$foldID <- blocksData[[sp]]$folds_ids
-    
-    keepCols <- c("ROUTENCODE", "latin_name", "occurrence", "x", "y", "foldID", predSel)
-    result[[sp]] <- list(data = spPaOut[, intersect(keepCols, names(spPaOut))],
-                         predictors = as.character(predSel))
+
+    spResult <- reproducible::Cache(
+      resolveLandscapeSpeciesPredictors, sp = sp, spPa = spPa, blocksSp = blocksData[[sp]],
+      spMode = spMode, requestedPredictors = speciesPredictorTable[[sp]],
+      spatialTerm = isTRUE(spatialTermSpecies[[sp]]), threshold = threshold, univar = univar,
+      cachePath = cachePath, userTags = c("collinearityCheckGerLandscape", spClean))
+
+    result[[sp]] <- spResult
   }
-  
+
   result
+}
+
+#' Resolve one species' final predictor set and assemble its model-ready table
+#'
+#' See `resolveHabitatSpeciesPredictors()` in `collinearityCheckGerHabitat.R`
+#' for the full rationale (same pattern, landscape scale).
+#'
+#' @inheritParams resolveHabitatSpeciesPredictors
+#' @return List with `data` (the final table) and `predictors`.
+resolveLandscapeSpeciesPredictors <- function(sp, spPa, blocksSp, spMode, requestedPredictors,
+                                               spatialTerm, threshold, univar) {
+  allPredictors <- covariatePredictorColumns()
+  predCols <- intersect(allPredictors, names(spPa))
+  allNaCols <- predCols[sapply(predCols, function(col) all(is.na(spPa[[col]])))]
+  predCols <- setdiff(predCols, allNaCols)
+  X <- spPa[, predCols, drop = FALSE]
+  X <- X[, sapply(X, function(col) length(unique(col[!is.na(col)])) > 1), drop = FALSE]
+
+  nPres <- sum(spPa$occurrence == 1)
+  nAbs <- sum(spPa$occurrence == 0)
+
+  if (identical(spMode, "table")) {
+    requested <- requestedPredictors
+    requested <- requested[!is.na(requested) & nzchar(trimws(requested))]
+
+    if (length(requested) == 0) {
+      stop(sprintf("Species '%s' has predictor_mode='table' at LANDSCAPE scale, but no predictors listed in speciesConfig_predictors.csv!", sp))
+    }
+
+    missingCols <- setdiff(requested, names(spPa))
+    if (length(missingCols) > 0) {
+      stop(sprintf("\n[PREDICTOR ERROR] Species '%s' [LANDSCAPE scale]:\nRequested predictor(s) %s were NOT found in occurrence data!\nAvailable columns: %s\n",
+                   sp, paste(dQuote(missingCols), collapse = ", "), paste(names(X), collapse = ", ")))
+    }
+    predSel <- requested
+
+  } else if (identical(spMode, "all")) {
+    predSel <- colnames(X)
+
+  } else {
+    # "auto": real block-CV collinearity selection
+    varSel <- select07Blockcv(X = X, y = spPa$occurrence, threshold = threshold,
+                              univar = univar, spBlock = blocksSp, weights = rep(1, nrow(spPa)))
+    occNum <- max(floor(min(nPres, nAbs) / 10), 1)
+    predSel <- stats::na.omit(varSel$pred_sel[1:min(occNum, length(varSel$pred_sel))])
+  }
+
+  # Append spatial coordinates ONCE if configured
+  if (isTRUE(spatialTerm)) {
+    predSel <- c(as.character(predSel), "x", "y")
+  }
+
+  message("Predictors used (", length(predSel), "): ", paste(predSel, collapse = ", "))
+
+  spPaOut <- spPa
+  spPaOut$foldID <- blocksSp$folds_ids
+
+  keepCols <- c("ROUTENCODE", "latin_name", "occurrence", "x", "y", "foldID", predSel)
+  list(data = spPaOut[, intersect(keepCols, names(spPaOut))],
+       predictors = as.character(predSel))
 }
