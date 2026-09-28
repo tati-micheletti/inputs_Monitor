@@ -138,12 +138,11 @@ defineModule(sim, list(
                     "subfolders. Must match dataPrep_Monitor's landscapeResolutionM."),
 
     ## Species -------------------------------------------------------------------------
-    defineParameter("species", "character",
-                    c("Vanellus vanellus", "Milvus milvus", "Lanius collurio",
-                      "Lullula arborea", "Alauda arvensis", "Saxicola rubetra",
-                      "Emberiza calandra", "Emberiza citrinella", "Buteo buteo",
-                      "Sturnus vulgaris", "Perdix perdix"), NA, NA,
-                    "Latin names of focal species. Must match dataPrep_Monitor's species param.")
+    defineParameter("species", "character", NA_character_, NA, NA,
+                    "Latin names of focal species -- no default (errors if unset); supply",
+                    "sharedSpecies from sharedConfig.R (repo root), same as",
+                    "dataPrep_Monitor's species param, so the two can never silently",
+                    "drift apart.")
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -168,6 +167,10 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      if (identical(P(sim)$species, NA_character_)) {
+        stop("inputs_Monitor's species parameter must be supplied explicitly ",
+             "(e.g. sharedSpecies from sharedConfig.R) -- no default roster.")
+      }
       sim <- scheduleEvent(sim, time(sim), "inputs_Monitor", "spatialBlocking")
       sim <- scheduleEvent(sim, time(sim), "inputs_Monitor", "collinearityCheck")
     },
