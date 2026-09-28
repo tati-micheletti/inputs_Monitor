@@ -193,8 +193,12 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         # bioclim window that occurrencePrepEurope() (dataPrep_Monitor)
         # used to train the EBBA2 climate SDM in the first place.
         windowStart <- P(sim)$ebba2TrainingYear - (P(sim)$climateWindowLength - 1)
-        bioclimFile <- file.path(predictorsDir, scaleLabel(P(sim)$climateResolutionM),
-                                  paste0("bioclim_", windowStart, "-", P(sim)$ebba2TrainingYear, ".tif"))
+        climateLabel <- scaleLabel(P(sim)$climateResolutionM)
+        # Resolution appended to the filename (second safety layer beyond
+        # the containing scaleLabel()-named folder).
+        bioclimFile <- file.path(predictorsDir, climateLabel,
+                                  paste0("bioclim_", windowStart, "-", P(sim)$ebba2TrainingYear,
+                                         "_", climateLabel, ".tif"))
         if (!file.exists(bioclimFile)) {
           stop("Expected bioclim training file not found: ", bioclimFile,
                "\nCheck that inputs_Monitor's ebba2TrainingYear/climateWindowLength match ",
@@ -205,9 +209,10 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
           europeOcc, bioclimFile,
           maxBlockSizeM = P(sim)$maxBlockSizeEuropeM,
           minBlockSizeM = P(sim)$minBlockSizeEuropeM, k = P(sim)$kFolds)
+        habitatResLabel <- scaleLabel(P(sim)$habitatResolutionM)
         habitatBlocks <- spatialBlockingGerHabitat(
-          habitatOcc, file.path(predictorsDir, scaleLabel(P(sim)$habitatResolutionM),
-                                 "solar_radiation_habitat.tif"),
+          habitatOcc, file.path(predictorsDir, habitatResLabel,
+                                 paste0("solar_radiation_habitat_", habitatResLabel, ".tif")),
           maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM,
           minBlockSizeM = P(sim)$blockSizeFloorMultiplier * P(sim)$habitatResolutionM,
           k = P(sim)$kFolds)
