@@ -268,16 +268,14 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
         speciesPredictorTable = resolveTablePerScale("habitat"),
         spatialTermSpecies = resolveSpatialTermPerScale("habitat"),
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
-        hedgesTreatment = P(sim)$hedgesTreatment)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
         predictorsToUse = resolveModePerScale("landscape"),
         speciesPredictorTable = resolveTablePerScale("landscape"),
         spatialTermSpecies = resolveSpatialTermPerScale("landscape"),
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
-        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
-        hedgesTreatment = P(sim)$hedgesTreatment)
+        threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar)
 
       sim$inputsData <- list(europe = europeResult, gerHabitat = habitatResult, gerLandscape = landscapeResult)
 
