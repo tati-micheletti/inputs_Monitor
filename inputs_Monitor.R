@@ -51,25 +51,20 @@ defineModule(sim, list(
                     "methodology). FALSE: use mimicSpatialBlocks() instead -- a plain stratified",
                     "random k-fold with the exact same output structure, so you can compare model",
                     "performance with/without spatial-autocorrelation-aware blocking."),
-    defineParameter("predictorsToUse", "character", "auto", NA, NA,
-                    "How each species picks its predictors. Three possible values: ",
-                    "\"auto\" (default) = pick automatically via collinearity selection; ",
-                    "\"all\" = use every available predictor, unfiltered; ",
-                    "\"table\" = use exactly the list in speciesPredictorTable (the next ",
-                    "parameter below) for that species. ",
-                    "Can be a single value (applies to every species), or a named list to ",
-                    "set it per species, e.g.: ",
-                    "list(\"Buteo buteo\" = \"table\", \"Milvus milvus\" = \"all\"). ",
-                    "A species left out of the list uses \"auto\". ",
-                    "(Populated from speciesConfig_general.csv's predictor_mode column when ",
-                    "run via runMe.R -- see that file for the actual per-species values.)"),
     defineParameter("speciesPredictorTable", "list", NULL, NA, NA,
-                    "The exact predictor list for species using predictorsToUse = \"table\" ",
-                    "(ignored for any species using \"all\" or \"auto\"). ",
+                    "The ONLY source of a species' candidate predictors -- no mode selector, ",
+                    "every species must be listed here (a species missing here is a hard ",
+                    "error at collinearityCheck time, not a silent fallback). ",
                     "Named list: species -> scale -> character vector of predictor names, e.g.: ",
                     "list(\"Buteo buteo\" = list(habitat = c(\"hedges\", \"grassland\"))). ",
-                    "A \"table\"-mode species missing here falls back to \"auto\" with a warning. ",
                     "(Populated from speciesConfig_predictors.csv when run via runMe.R.)"),
+    defineParameter("dropCollinearPredictors", "logical", FALSE, NA, NA,
+                    "FALSE (default): use each species' speciesPredictorTable list exactly as ",
+                    "given. TRUE: prune that same list for collinearity via real block-CV ",
+                    "selection (select07Blockcv()), capped at 1 predictor per 10 occurrences -- ",
+                    "narrows what the table says to consider, never substitutes a different ",
+                    "candidate set. A module-level technical/algorithmic toggle, not per-species ",
+                    "(matches collinearityThreshold/collinearityUnivar's existing pattern)."),
     defineParameter("spatialTermConfig", "list", NULL, NA, NA,
                     "Which species+scale get projected x/y coordinates added as an extra ",
                     "BRT predictor (a spatial trend-surface term meant to absorb residual ",
@@ -81,15 +76,13 @@ defineModule(sim, list(
                     "climate-scale predictions) as help it. ",
                     "(Populated from speciesConfig_general.csv's spatial_term column when run ",
                     "via runMe.R, via extractSpatialTermSpecies() -- see that file.)"),
-    # defineParameter("hedgesTreatment", "character", "backfill", NA, NA,
-    #                 "One of \"drop\" (default) or \"backfill\". \"drop\": hedges is never offered",
-    #                 "to collinearity selection (methodology decision, 2026-09). \"backfill\":",
-    #                 "hedges is offered as a normal candidate predictor -- its pre-2017/2022-2023",
-    #                 "gaps are already filled from the nearest real year upstream in",
-    #                 "dataPrep_Monitor (loadCovariates()/loadHabitatCovariates()/",
-    #                 "occurrencePrepGerHabitat()), so this doesn't invent new fill logic, it",
-    #                 "just re-exposes an already-backfilled column. See covariatePredictorColumns()."),
-
+    defineParameter("resolutionConfig", "list", NULL, NA, NA,
+                    "Named list: species -> scale -> resolution (m), or NA (falls back to that ",
+                    "scale's shared *ResolutionM default). Used to group species by their ",
+                    "resolved resolution for spatial blocking -- each distinct group gets its ",
+                    "own reference grid and its own block-size floor. (Populated from ",
+                    "speciesConfig_general.csv's resolution_m column via ",
+                    "extractResolutionConfig() -- see sharedSpeciesConfig.R.)"),
     ## Spatial blocking parameters --------------------------------------------------
     defineParameter("kFolds", "numeric", 5, NA, NA,
                     "Number of CV folds/blocks."),
@@ -189,40 +182,72 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
       predictorsDir <- file.path(inputPath(sim), "predictors", "processed")
 
       if (isTRUE(P(sim)$runSpatialBlocking)) {
+        # Group species by their own resolved resolution per scale (see
+        # DECISIONS.md, 2026-09-28) -- each distinct group gets its own
+        # reference grid + block-size floor, computed once per group
+        # rather than once globally. A species absent from
+        # resolutionConfig, or with a blank/NA entry there, falls back to
+        # that scale's shared default -- so with nobody overridden (as of
+        # today) this produces exactly one group per scale, identical to
+        # the previous behaviour.
+        groupSpeciesByResolution <- function(species, scale, sharedDefault) {
+          resVals <- vapply(species, function(sp) {
+            v <- if (!is.null(P(sim)$resolutionConfig)) P(sim)$resolutionConfig[[sp]][[scale]] else NULL
+            if (is.null(v) || is.na(v)) sharedDefault else v
+          }, numeric(1))
+          split(species, resVals)
+        }
+
         # Deterministic, not a guess from file mtimes: the exact same
         # bioclim window that occurrencePrepEurope() (dataPrep_Monitor)
         # used to train the EBBA2 climate SDM in the first place.
         windowStart <- P(sim)$ebba2TrainingYear - (P(sim)$climateWindowLength - 1)
-        climateLabel <- scaleLabel(P(sim)$climateResolutionM)
-        # Resolution appended to the filename (second safety layer beyond
-        # the containing scaleLabel()-named folder).
-        bioclimFile <- file.path(predictorsDir, climateLabel,
-                                  paste0("bioclim_", windowStart, "-", P(sim)$ebba2TrainingYear,
-                                         "_", climateLabel, ".tif"))
-        if (!file.exists(bioclimFile)) {
-          stop("Expected bioclim training file not found: ", bioclimFile,
-               "\nCheck that inputs_Monitor's ebba2TrainingYear/climateWindowLength match ",
-               "dataPrep_Monitor's, and that prepareClimateData has run.")
+
+        europeGroups <- groupSpeciesByResolution(names(europeOcc), "climate", P(sim)$climateResolutionM)
+        europeBlocks <- list()
+        for (resStr in names(europeGroups)) {
+          resM <- as.numeric(resStr)
+          resLabel <- scaleLabel(resM)
+          bioclimFile <- file.path(predictorsDir, resLabel,
+                                    paste0("bioclim_", windowStart, "-", P(sim)$ebba2TrainingYear,
+                                           "_", resLabel, ".tif"))
+          if (!file.exists(bioclimFile)) {
+            stop("Expected bioclim training file not found: ", bioclimFile,
+                 "\nCheck that inputs_Monitor's ebba2TrainingYear/climateWindowLength match ",
+                 "dataPrep_Monitor's, and that prepareClimateData has run.")
+          }
+          europeBlocks <- c(europeBlocks, spatialBlockingEurope(
+            europeOcc[europeGroups[[resStr]]], bioclimFile,
+            maxBlockSizeM = P(sim)$maxBlockSizeEuropeM,
+            minBlockSizeM = P(sim)$minBlockSizeEuropeM, k = P(sim)$kFolds))
         }
 
-        europeBlocks <- spatialBlockingEurope(
-          europeOcc, bioclimFile,
-          maxBlockSizeM = P(sim)$maxBlockSizeEuropeM,
-          minBlockSizeM = P(sim)$minBlockSizeEuropeM, k = P(sim)$kFolds)
-        habitatResLabel <- scaleLabel(P(sim)$habitatResolutionM)
-        habitatBlocks <- spatialBlockingGerHabitat(
-          habitatOcc, file.path(predictorsDir, habitatResLabel,
-                                 paste0("solar_radiation_habitat_", habitatResLabel, ".tif")),
-          maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM,
-          minBlockSizeM = P(sim)$blockSizeFloorMultiplier * P(sim)$habitatResolutionM,
-          k = P(sim)$kFolds)
-        landscapeRefFile <- list.files(file.path(predictorsDir, scaleLabel(P(sim)$landscapeResolutionM)),
-                                        pattern = "^landuse_.*\\.tif$", full.names = TRUE)[1]
-        landscapeBlocks <- spatialBlockingGerLandscape(
-          landscapeOcc, landscapeRefFile,
-          maxBlockSizeM = P(sim)$maxBlockSizeGerLandscapeM,
-          minBlockSizeM = P(sim)$blockSizeFloorMultiplier * P(sim)$landscapeResolutionM,
-          k = P(sim)$kFolds)
+        habitatGroups <- groupSpeciesByResolution(names(habitatOcc), "habitat", P(sim)$habitatResolutionM)
+        habitatBlocks <- list()
+        for (resStr in names(habitatGroups)) {
+          resM <- as.numeric(resStr)
+          resLabel <- scaleLabel(resM)
+          refPath <- file.path(predictorsDir, resLabel, paste0("solar_radiation_habitat_", resLabel, ".tif"))
+          habitatBlocks <- c(habitatBlocks, spatialBlockingGerHabitat(
+            habitatOcc[habitatGroups[[resStr]]], refPath,
+            maxBlockSizeM = P(sim)$maxBlockSizeGerHabitatM,
+            minBlockSizeM = P(sim)$blockSizeFloorMultiplier * resM,
+            k = P(sim)$kFolds))
+        }
+
+        landscapeGroups <- groupSpeciesByResolution(names(landscapeOcc), "landscape", P(sim)$landscapeResolutionM)
+        landscapeBlocks <- list()
+        for (resStr in names(landscapeGroups)) {
+          resM <- as.numeric(resStr)
+          resLabel <- scaleLabel(resM)
+          landscapeRefFile <- list.files(file.path(predictorsDir, resLabel),
+                                          pattern = "^landuse_.*\\.tif$", full.names = TRUE)[1]
+          landscapeBlocks <- c(landscapeBlocks, spatialBlockingGerLandscape(
+            landscapeOcc[landscapeGroups[[resStr]]], landscapeRefFile,
+            maxBlockSizeM = P(sim)$maxBlockSizeGerLandscapeM,
+            minBlockSizeM = P(sim)$blockSizeFloorMultiplier * resM,
+            k = P(sim)$kFolds))
+        }
       } else {
         message("runSpatialBlocking = FALSE -- using mimicSpatialBlocks() instead of real ",
                 "spatial CV blocking.")
@@ -254,33 +279,29 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
       habitatLabel <- scaleLabel(P(sim)$habitatResolutionM)
       landscapeLabel <- scaleLabel(P(sim)$landscapeResolutionM)
 
-      resolveModePerScale <- function(scale) {
-        if (is.list(P(sim)$predictorsToUse)) extractScaleExtras(P(sim)$predictorsToUse, scale)
-        else P(sim)$predictorsToUse
-      }
       resolveTablePerScale <- function(scale) extractScaleExtras(P(sim)$speciesPredictorTable, scale)
       resolveSpatialTermPerScale <- function(scale) extractScaleExtras(P(sim)$spatialTermConfig, scale)
 
       europeResult <- collinearityCheckEurope(
         sim$pooledOccurrence$europe, sim$spatialBlocks$europe,
-        predictorsToUse = resolveModePerScale("climate"),
         speciesPredictorTable = resolveTablePerScale("climate"),
+        dropCollinearPredictors = P(sim)$dropCollinearPredictors,
         spatialTermSpecies = resolveSpatialTermPerScale("climate"),
         corrplotDir = file.path(outputPath(sim), climateLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
         cachePath = cachePath(sim))
       habitatResult <- collinearityCheckGerHabitat(
         sim$pooledOccurrence$gerHabitat, sim$spatialBlocks$gerHabitat,
-        predictorsToUse = resolveModePerScale("habitat"),
         speciesPredictorTable = resolveTablePerScale("habitat"),
+        dropCollinearPredictors = P(sim)$dropCollinearPredictors,
         spatialTermSpecies = resolveSpatialTermPerScale("habitat"),
         corrplotDir = file.path(outputPath(sim), habitatLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
         cachePath = cachePath(sim))
       landscapeResult <- collinearityCheckGerLandscape(
         sim$pooledOccurrence$gerLandscape, sim$spatialBlocks$gerLandscape,
-        predictorsToUse = resolveModePerScale("landscape"),
         speciesPredictorTable = resolveTablePerScale("landscape"),
+        dropCollinearPredictors = P(sim)$dropCollinearPredictors,
         spatialTermSpecies = resolveSpatialTermPerScale("landscape"),
         corrplotDir = file.path(outputPath(sim), landscapeLabel, "corrplots"),
         threshold = P(sim)$collinearityThreshold, univar = P(sim)$collinearityUnivar,
