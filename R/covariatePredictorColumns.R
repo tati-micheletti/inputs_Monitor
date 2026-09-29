@@ -1,9 +1,12 @@
 #' Candidate predictor column names for the German habitat and landscape SDMs
 #'
-#' Shared by both scales -- land use (14 categories) + land cover 
+#' Shared by both scales -- land use (14 categories) + land cover
 #' (3 categories) + DEM derivatives (2
 #' layers: elevation, slope -- solar_radiation dropped 2026-09-26, see
-#' DECISIONS.md).
+#' DECISIONS.md) + two derived covariates (dist_to_woodland,
+#' landscape_heterogeneity -- see dataPrep_Monitor's computeDistToWoodland()/
+#' computeHeterogeneityIndex(), added 2026-09-29 as hedges-backfill
+#' alternatives).
 #'
 #' `hedges` is included by default (methodology decision, 2026-09), but can be
 #' excluded by marking in the shared config files. Either way it's already
@@ -22,5 +25,6 @@ covariatePredictorColumns <- function(...) {
     "rapeseed", "sunflower", "vegetables", "legumes", "hedges", "fallow",
     "grapevine", "hops", "orchards_and_berries",
     "built_up", "trees", "water",
-    "elevation", "slope")
+    "elevation", "slope",
+    "dist_to_woodland", "landscape_heterogeneity")
 }
