@@ -123,6 +123,19 @@ defineModule(sim, list(
                     "Rolling window length (years) used to compute the bioclim climatology.",
                     "Must match dataPrep_Monitor's climateWindowLength."),
 
+    ## Fitting years (must match dataPrep_Monitor's/models_Monitor's copies) -----------
+    defineParameter("habitatYears", "numeric", NULL, NA, NA,
+                    "NULL (default): pool every <species>_habitat_<year>.rds file found,",
+                    "regardless of year (today's original behavior). Otherwise restrict",
+                    "poolOccurrenceGerHabitat() to exactly these years -- confirmed necessary",
+                    "2026-09-30: without it, stale files left over from an earlier run with a",
+                    "different year range get silently pooled alongside the current run's",
+                    "fresh files. Should match dataPrep_Monitor's habitatYears."),
+    defineParameter("landscapeYears", "numeric", NULL, NA, NA,
+                    "Same rationale as habitatYears, for poolOccurrenceGerLandscape()'s",
+                    "<species>_landscape_<year>.rds files. Should match dataPrep_Monitor's",
+                    "landscapeYears."),
+
     ## Scale resolutions (must match dataPrep_Monitor's/models_Monitor's copies) -------
     defineParameter("climateResolutionM", "numeric", 50000, NA, NA,
                     "Resolution (m) of the climate scale -- used, via scaleLabel(), to",
@@ -179,8 +192,10 @@ doEvent.inputs_Monitor = function(sim, eventTime, eventType) {
       # ! ----- EDIT BELOW ----- ! #
       occurrenceDir <- file.path(inputPath(sim), "response", "processed")
       europeOcc <- poolOccurrenceEurope(file.path(occurrenceDir, "ornitho"), P(sim)$species)
-      habitatOcc <- poolOccurrenceGerHabitat(file.path(occurrenceDir, "MhB"), P(sim)$species)
-      landscapeOcc <- poolOccurrenceGerLandscape(file.path(occurrenceDir, "territories"), P(sim)$species)
+      habitatOcc <- poolOccurrenceGerHabitat(file.path(occurrenceDir, "MhB"), P(sim)$species,
+                                              years = P(sim)$habitatYears)
+      landscapeOcc <- poolOccurrenceGerLandscape(file.path(occurrenceDir, "territories"), P(sim)$species,
+                                                   years = P(sim)$landscapeYears)
 
       predictorsDir <- file.path(inputPath(sim), "predictors", "processed")
 
