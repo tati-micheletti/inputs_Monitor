@@ -5,13 +5,18 @@
 #'
 #' @param occDir Character. Directory of `<species>_landscape_<year>.rds` files.
 #' @param species Character vector of Latin species names.
-#' @param years Integer vector, or NULL (default). If supplied, only files
-#'   whose embedded year is in this set are pooled -- confirmed necessary
-#'   2026-09-30: without this, stale files left over from an earlier run
-#'   with a different (e.g. broader) year range get silently pooled
-#'   alongside the current run's fresh files, mixing different covariate
-#'   vintages into one training table. NULL (default): pool every file
-#'   found, today's original behavior.
+#' @param years Integer vector, named list (species -> integer vector), or
+#'   NULL (default). If supplied, only files whose embedded year is in the
+#'   relevant set are pooled -- confirmed necessary 2026-09-30: without
+#'   this, stale files left over from an earlier run with a different
+#'   (e.g. broader) year range get silently pooled alongside the current
+#'   run's fresh files, mixing different covariate vintages into one
+#'   training table. A named list lets each species use its own year
+#'   range (e.g. Buteo buteo/Sturnus vulgaris's real MhB point-count data
+#'   is negligible before ~2020, while DDA-territories species genuinely
+#'   span a wider range) -- see `resolveYearsPerSpecies()` in
+#'   `sharedSpeciesConfig.R`. A flat vector applies the same years to every
+#'   species (backward compatible). NULL (default): pool every file found.
 #' @return Named list (by species) of pooled occurrence+covariate data.frames.
 poolOccurrenceGerLandscape <- function(occDir, species, years = NULL) {
   occFiles <- list.files(occDir, pattern = "\\.rds$", full.names = TRUE)
@@ -21,9 +26,10 @@ poolOccurrenceGerLandscape <- function(occDir, species, years = NULL) {
     spClean <- gsub(" ", "_", sp)
     spFiles <- occFiles[grep(spClean, occFiles, fixed = TRUE)]
 
-    if (!is.null(years)) {
+    yearsForSp <- if (is.list(years)) years[[sp]] else years
+    if (!is.null(yearsForSp)) {
       fileYears <- as.integer(sub(".*_landscape_(\\d{4})\\.rds$", "\\1", basename(spFiles)))
-      spFiles <- spFiles[fileYears %in% years]
+      spFiles <- spFiles[fileYears %in% yearsForSp]
     }
 
     if (length(spFiles) == 0) {
