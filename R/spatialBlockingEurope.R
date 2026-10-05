@@ -31,6 +31,7 @@ spatialBlockingEurope <- function(pooledData, bioclimFile, maxBlockSizeM = 15000
     cvBlSize <- determineBlockSize(sfSpecOcc, maxBlockSizeM, minBlockSizeM)
 
     message("    Creating spatial blocks (", k, " folds)...")
+    set.seed(stableSeed(c("cv_spatial", "climate", sp, nrow(sfSpecOcc))))
     scv <- blockCV::cv_spatial(x = sfSpecOcc, column = "occurrence", r = bioclim, k = k,
                                 size = cvBlSize, selection = "random", iteration = 50,
                                 progress = FALSE, biomod2 = FALSE, plot = FALSE, report = FALSE)

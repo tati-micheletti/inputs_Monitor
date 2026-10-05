@@ -52,6 +52,7 @@ spatialBlockingGerHabitat <- function(pooledData, refRasterPath, maxBlockSizeM =
     cvBlSize <- determineBlockSize(sfOcc, maxBlockSizeM, minBlockSizeM)
 
     message("  Creating spatial blocks (", k, " folds)...")
+    set.seed(stableSeed(c("cv_spatial", "habitat", sp, nrow(sfOcc))))
     scv <- tryCatch({
       blockCV::cv_spatial(x = sfOcc, column = "occurrence", r = refRaster, k = k,
                            size = cvBlSize, selection = "random", iteration = 50,
