@@ -1,7 +1,7 @@
 #' Candidate predictor column names for the German habitat and landscape SDMs
 #'
 #' Shared by both scales -- land use (14 categories) + land cover
-#' (3 categories) + DEM derivatives (2
+#' (7 categories) + DEM derivatives (2
 #' layers: elevation, slope -- solar_radiation dropped 2026-09-26, see
 #' DECISIONS.md) + two derived covariates (dist_to_woodland,
 #' landscape_heterogeneity -- see dataPrep_Monitor's computeDistToWoodland()/
@@ -25,6 +25,7 @@ covariatePredictorColumns <- function(...) {
     "rapeseed", "sunflower", "vegetables", "legumes", "hedges", "fallow",
     "grapevine", "hops", "orchards_and_berries",
     "built_up", "trees", "water",
+    "natural_grassland", "heath_moor", "scrub", "wetland_peat",         # CORINE semi-natural classes (2026-10-21)
     "elevation", "slope",
-    "dist_to_woodland", "landscape_heterogeneity")
+    "dist_to_woodland", "landscape_heterogeneity", "unmapped_other")
 }
