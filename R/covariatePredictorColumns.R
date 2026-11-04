@@ -10,11 +10,16 @@
 #'
 #' `hedges` is included by default (methodology decision, 2026-09), but can be
 #' excluded by marking in the shared config files. Either way it's already
-#' computed upstream in dataPrep_Monitor's landuse category layers, with
-#' pre-2017/2022-2023 gaps already backfilled from the nearest real year
-#' (`loadCovariates()`/`loadHabitatCovariates()`/`occurrencePrepGerHabitat()`
-#' in dataPrep_Monitor) -- "backfill" here doesn't invent new fill logic, it
-#' just re-offers an already-backfilled column to collinearity selection.
+#' computed upstream in dataPrep_Monitor's landuse category layers, and since
+#' 2026-11-03 it is ONE FIXED layer in every land-use file (the mean of the hedge
+#' layers of the years that have CTM hedge data, 2017-2021 and 2024-2025;
+#' `completeHedges(mode = "mean")`, see DECISIONS.md 2026-11-03), so hedges carry
+#' no time signal. (Before that, years without hedge data took the layer of the
+#' nearest preceding year; that rule is kept as `mode = "nearest"` and survives,
+#' unused, as back-fill code in `loadCovariates()`/`loadHabitatCovariates()`
+#' and `occurrencePrepGerHabitat()`, which no longer triggers because the files
+#' have no NA hedge cells.) "Backfill" in the old text of this function only
+#' re-offered an already-filled column to collinearity selection.
 #' `collinearityCheckGerHabitat()`/`GerLandscape()` still drop it per-species
 #' if it ends up all-NA for that species' pooled data, same as any other
 #' candidate predictor.
